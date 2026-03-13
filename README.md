@@ -1,6 +1,6 @@
 # Pisum Langue
 
-AI driven transiption and translation.
+Hotkey-driven, system-tray-style dictation tool.
 
 
 
