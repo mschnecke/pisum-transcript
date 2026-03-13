@@ -1,6 +1,6 @@
 # Implementation Plan: AI-Driven Transcription
 
-> Generated from: `docs/PRD-transcription-and-translation.md`
+> Generated from: `docs/PRD-transcription.md`
 > Date: 2026-03-13
 
 ## 1. Overview
@@ -51,7 +51,7 @@ Hotkey Down (Push-to-Talk)
 
 Hotkey Up (Release)
   → AudioRecorderService.StopRecording()
-  → Encode to Opus (or MP3 fallback)
+  → Encode to OGG_OPUS (or MP3 fallback)
   → Save temp file
 
   → ITranscriptionService.TranscribeAsync(audioFile, prompt)
@@ -247,8 +247,8 @@ public interface ISettingsService
   - `Pisum.Langue.slnx` — solution file with all projects
   - `src/Pisum.Langue.Core/Pisum.Langue.Core.csproj` — `net10.0` class library
   - `src/Pisum.Langue.App/Pisum.Langue.App.csproj` — `net10.0` Avalonia app, references Core
-  - `src/Pisum.Langue.Platform.Windows/Pisum.Langue.Platform.Windows.csproj` — `net10.0-windows`, references Core
-  - `src/Pisum.Langue.Platform.MacOS/Pisum.Langue.Platform.MacOS.csproj` — `net10.0-macos`, references Core
+  - `src/Pisum.Langue.Platform.Windows/Pisum.Langue.Platform.Windows.csproj` — `net10.0-windows10.0.19041.0`, references Core
+  - `src/Pisum.Langue.Platform.MacOS/Pisum.Langue.Platform.MacOS.csproj` — `net10.0-macos` (requires macos workload), references Core
   - `tests/Pisum.Langue.Core.Tests/Pisum.Langue.Core.Tests.csproj` — xUnit test project
   - `tests/Pisum.Langue.App.Tests/Pisum.Langue.App.Tests.csproj` — xUnit test project
 - **Implementation details:**
@@ -277,7 +277,7 @@ public interface ISettingsService
 #### Task 1.3: Define Core Models
 
 - **Files to create:**
-  - `src/Pisum.Langue.Core/Models/AppSettings.cs` — properties: `Hotkey`, `AudioFormat`, `Providers` (list of `ProviderConfig`), `Prompt`, `MaxRecordingDurationSeconds` (default 600)
+  - `src/Pisum.Langue.Core/Models/AppSettings.cs` — properties: `Hotkey`, `AudioFormat`, `Providers` (list of `ProviderConfig`), `Prompt`, `Language` (BCP-47 code, default `"en-US"`), `MaxRecordingDurationSeconds` (default 600), `AutoStart` (default `true`)
   - `src/Pisum.Langue.Core/Models/ProviderConfig.cs` — properties: `Name`, `Type` (e.g. "Google"), `ApiKey`, `Enabled`
   - `src/Pisum.Langue.Core/Models/TranscriptionResult.cs` — `Text`, `Duration`, `Success`, `ErrorMessage`
   - `src/Pisum.Langue.Core/Models/RecordingStateChangedEventArgs.cs` — `IsRecording`, `Duration`
@@ -331,7 +331,7 @@ public interface ISettingsService
 - **Files to create:**
   - `src/Pisum.Langue.Platform.MacOS/Services/MacOSGlobalHotkeyService.cs`
 - **Implementation details:**
-  - Use `CGEvent` tap via P/Invoke or `NSEvent.AddGlobalMonitorForEvents` to detect key-down and key-up
+  - Use `CGEvent` tap or `NSEvent.AddGlobalMonitorForEvents` via .NET macOS workload bindings to detect key-down and key-up
   - Request Accessibility permissions (required for global event monitoring)
   - Invoke `onKeyDown` / `onKeyUp` callbacks on main thread
 - **Dependencies:** Task 1.2, Task 1.4
@@ -356,7 +356,7 @@ public interface ISettingsService
 - **Files to create:**
   - `src/Pisum.Langue.Platform.MacOS/Services/MacOSAudioRecorderService.cs`
 - **Implementation details:**
-  - Use AVFoundation via .NET macOS bindings to capture from default microphone
+  - Use AVFoundation via .NET macOS workload bindings (`net10.0-macos` TFM) to capture from default microphone
   - Request Microphone permissions
   - Buffer PCM audio, enforce max recording duration (10 min)
   - Raise `StateChanged` event on start/stop
@@ -368,13 +368,13 @@ public interface ISettingsService
 - **Files to create:**
   - `src/Pisum.Langue.App/Services/AudioEncoderService.cs`
 - **Implementation details:**
-  - Opus encoding via **Concentus** NuGet package (pure .NET, cross-platform)
-  - MP3 as fallback via **NAudio.Lame** (Windows) or alternative on macOS
+  - Opus encoding via **Concentus** NuGet package (pure .NET, cross-platform), wrapped in OGG container via **Concentus.OggFile** — produces OGG_OPUS files compatible with Google Speech-to-Text API
+  - MP3 as fallback via **NAudio.Lame** (Windows) or **LAME** CLI on macOS
   - Prefer Opus as default — smallest file size with best quality for speech
   - Write compressed output to temp file, return path
   - NuGet: `Concentus`, `Concentus.OggFile`
 - **Dependencies:** Task 2.3, Task 2.4
-- **Acceptance criteria:** PCM audio buffer encodes to Opus file; file plays correctly in a media player
+- **Acceptance criteria:** PCM audio buffer encodes to OGG_OPUS file; file plays correctly in a media player; file is accepted by Google Speech-to-Text API
 
 #### Task 2.6: Wire Hotkey to Push-to-Talk Recording
 
@@ -397,11 +397,11 @@ public interface ISettingsService
   - `src/Pisum.Langue.App/Services/GoogleTranscriptionService.cs`
 - **Implementation details:**
   - Implement `ITranscriptionService`
-  - Use **Google.Cloud.Speech.V2** NuGet package (or REST API via `HttpClient`)
-  - Send audio file with configurable prompt/context (vocabulary hints, formatting instructions)
+  - Use Google Cloud Speech-to-Text REST API via `HttpClient` with API key authentication (passed as `key` query parameter)
+  - Send OGG_OPUS audio file with configurable prompt/context (vocabulary hints, formatting instructions) and language code from settings
   - Parse response into `TranscriptionResult`
   - Handle errors gracefully (network, auth, quota)
-  - NuGet: `Google.Cloud.Speech.V2` or `Google.Apis.Speech.v1`
+  - No SDK dependency — use REST API directly for simpler auth (API key vs service account)
 
   ```csharp
   public class GoogleTranscriptionService : ITranscriptionService
@@ -418,7 +418,7 @@ public interface ISettingsService
       public async Task<TranscriptionResult> TranscribeAsync(
           string audioFilePath, string? prompt, CancellationToken ct)
       {
-          // Read audio file, send to Google API using _config.ApiKey, parse response
+          // Read OGG_OPUS audio file, send to Google API using _config.ApiKey as query param, include language code, parse response
       }
   }
   ```
@@ -450,7 +450,7 @@ public interface ISettingsService
           if (providers.Length == 0)
               return TranscriptionResult.Failure("No providers configured");
 
-          var idx = Interlocked.Increment(ref _index) % providers.Length;
+          var idx = (Interlocked.Increment(ref _index) & 0x7FFFFFFF) % providers.Length;
           var result = await providers[idx].TranscribeAsync(audioFilePath, prompt, ct);
 
           if (!result.Success && providers.Length > 1)
@@ -515,7 +515,7 @@ public interface ISettingsService
 - **Files to create:**
   - `src/Pisum.Langue.Platform.MacOS/Services/MacOSClipboardService.cs`
 - **Implementation details:**
-  - Use Avalonia's cross-platform `IClipboard` or `NSPasteboard` via P/Invoke
+  - Use Avalonia's cross-platform `IClipboard` or `NSPasteboard` via .NET macOS workload bindings
   - Same interface as Windows: `SetTextAsync(string)`
 - **Dependencies:** Task 1.2
 - **Acceptance criteria:** Can write text to clipboard on macOS
@@ -589,7 +589,7 @@ public interface ISettingsService
   - `src/Pisum.Langue.App/Views/SettingsWindow.axaml` — XAML layout
   - `src/Pisum.Langue.App/Views/SettingsWindow.axaml.cs` — code-behind
 - **Implementation details:**
-  - Sections: Hotkey, Audio Format (Opus/MP3), Providers (list — add/remove/reorder, each with name, type, API key, enabled toggle), Prompt
+  - Sections: Hotkey, Audio Format (Opus/MP3), Language (BCP-47 dropdown/text, e.g. `en-US`), Providers (list — add/remove/reorder, each with name, type, API key, enabled toggle), Prompt, Auto-Start (checkbox)
   - Use Avalonia Fluent theme controls
   - Open from tray icon right-click "Settings"
   - Single-instance window (don't open multiple)
@@ -639,7 +639,7 @@ public interface ISettingsService
   - `src/Pisum.Langue.Platform.MacOS/Services/MacOSNotificationService.cs`
 - **Implementation details:**
   - Implement `INotificationService`
-  - Use `NSUserNotificationCenter` or `UNUserNotificationCenter` via P/Invoke
+  - Use `NSUserNotificationCenter` or `UNUserNotificationCenter` via .NET macOS workload bindings
   - Show app name and icon in the notification
 - **Dependencies:** Task 1.2
 - **Acceptance criteria:** Error and info messages appear as macOS notifications
@@ -655,6 +655,21 @@ public interface ISettingsService
 - **Dependencies:** Task 4.5, Task 6.2, Task 6.3
 - **Acceptance criteria:** Errors surface as OS-native toast notifications; no silent failures
 
+#### Task 6.5: Auto-Start with OS
+
+- **Files to create:**
+  - `src/Pisum.Langue.Platform.Windows/Services/WindowsAutoStartService.cs`
+  - `src/Pisum.Langue.Platform.MacOS/Services/MacOSAutoStartService.cs`
+  - `src/Pisum.Langue.Core/Interfaces/IAutoStartService.cs`
+- **Implementation details:**
+  - Define `IAutoStartService` with `Enable()`, `Disable()`, `IsEnabled` in Core
+  - Windows: Add/remove registry key under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+  - macOS: Add/remove a Login Item via `SMAppService` (workload bindings) or `osascript` fallback
+  - Wire to `AppSettings.AutoStart` — when the setting changes, call `Enable()` or `Disable()`
+  - Default: enabled on first launch
+- **Dependencies:** Task 5.1, Task 5.4
+- **Acceptance criteria:** App starts automatically on OS login when enabled; disabling the setting removes auto-start
+
 ## 6. Data Model Changes
 
 No database is used. All persistence is file-based:
@@ -665,12 +680,14 @@ No database is used. All persistence is file-based:
   {
     "hotkey": { "key": "F9", "modifiers": [] },
     "audioFormat": "Opus",
+    "language": "en-US",
     "providers": [
       { "name": "Google Primary", "type": "Google", "apiKey": "key-1", "enabled": true },
       { "name": "Google Secondary", "type": "Google", "apiKey": "key-2", "enabled": true }
     ],
     "prompt": "",
-    "maxRecordingDurationSeconds": 600
+    "maxRecordingDurationSeconds": 600,
+    "autoStart": true
   }
   ```
 
@@ -682,8 +699,9 @@ No API endpoints are exposed. The app is a standalone desktop application.
 
 - Google Cloud Speech-to-Text API v2
   - Endpoint: `speech.googleapis.com`
-  - Auth: API key or service account
-  - Request: audio bytes + recognition config (encoding, sample rate, language, prompt)
+  - Auth: API key (passed as `key` query parameter — no service account files required)
+  - Audio format: OGG_OPUS (Opus-encoded audio in OGG container)
+  - Request: audio bytes + recognition config (encoding: OGG_OPUS, sample rate, language code from settings, prompt)
   - Response: transcription text with confidence score
 
 ## 8. Dependencies & Risks
@@ -698,7 +716,7 @@ No API endpoints are exposed. The app is a standalone desktop application.
 | `CommunityToolkit.Mvvm`                      | MVVM helpers (ObservableObject, RelayCommand)    | 5     |
 | `NAudio`                                     | Windows audio capture                            | 2     |
 | `Concentus` + `Concentus.OggFile`            | Opus encoding (cross-platform)                   | 2     |
-| `Google.Cloud.Speech.V2`                     | Google Speech-to-Text SDK                        | 3     |
+| *(none — REST API via HttpClient)*           | Google Speech-to-Text (API key auth)             | 3     |
 | `Microsoft.Extensions.DependencyInjection`   | DI container                                     | 1     |
 | `Microsoft.Extensions.Logging`               | Logging abstractions                             | 1     |
 
@@ -768,7 +786,7 @@ No API endpoints are exposed. The app is a standalone desktop application.
 | ---------------- | ------------------------------------------------- | ----------------- | ---------------------------------------------------------- |
 | Recording #1     | Configurable global hotkey on Windows and macOS    | 2.1, 2.2, 5.3    | Both platforms from Phase 2                                |
 | Recording #2     | Capture audio from default microphone              | 2.3, 2.4          | Both platforms from Phase 2                                |
-| Recording #3     | Encode to compressed format (Opus, MP3)            | 2.5               | Opus preferred; M4A removed                                |
+| Recording #3     | Encode to OGG_OPUS (or MP3 fallback)               | 2.5               | OGG_OPUS for Google API compatibility                      |
 | Recording #4     | Stop recording on hotkey release (push-to-talk)    | 2.1, 2.2, 2.6    | Push-to-talk only                                          |
 | Recording #5     | Audio/visual feedback for recording state          | 6.1               |                                                            |
 | Transcription #1 | Send audio + prompt to AI provider                 | 3.1, 3.2, 3.3     | Round-robin across configured providers                    |
@@ -779,8 +797,10 @@ No API endpoints are exposed. The app is a standalone desktop application.
 | Error Handling #1| Show OS-native toast on errors                     | 6.2, 6.3, 6.4    | Windows toast + macOS notification                         |
 | Error Handling #2| Detect network/API failures                        | 4.5, 6.4          | No silent failures                                         |
 | Configuration #1 | Settings UI from system tray                       | 5.3               |                                                            |
-| Configuration #2 | Persist settings between sessions                  | 5.1               |                                                            |
-| Configuration #3 | Start minimized to tray / menu bar                 | 1.4               |                                                            |
+| Configuration #2 | Configurable transcription language (BCP-47)       | 5.3, 3.1          | Language sent with each transcription request              |
+| Configuration #3 | Persist settings between sessions                  | 5.1               |                                                            |
+| Configuration #4 | Start minimized to tray / menu bar                 | 1.4               |                                                            |
+| Configuration #5 | Auto-start with OS                                 | 6.5               | Windows Startup registry / macOS Login Items               |
 
 ### User Stories
 

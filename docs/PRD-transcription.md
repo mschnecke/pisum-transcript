@@ -27,15 +27,17 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 
 1. The system must register a configurable global hotkey that works across all applications on Windows and macOS.
 2. The system must capture audio from the default system microphone when the hotkey is activated.
-3. The system must encode the captured audio to a compressed format (Opus preferred, MP3 as fallback).
+3. The system must encode the captured audio to Opus in an OGG container (OGG_OPUS) for Google API compatibility. MP3 is available as a fallback format.
 4. The system must stop recording when the hotkey is released (push-to-talk mode).
-5. The system must provide audio/visual feedback (e.g., system tray icon change, small overlay) to indicate recording state.
+5. The system must enforce a maximum recording duration of 10 minutes. Recording auto-stops when the limit is reached.
+6. The system must provide audio/visual feedback (e.g., system tray icon change, small overlay) to indicate recording state.
 
 ### Transcription
 
 1. The system must send the recorded audio file to a speech-to-text AI provider along with a configurable prompt.
 2. The system must support configurable prompts that can guide the transcription (e.g., vocabulary hints, formatting instructions).
 3. The AI provider must be abstracted behind an interface (`ITranscriptionService`) so the implementation can be swapped without modifying consuming code.
+4. The system must distribute transcription requests across configured providers in round-robin order to balance API rate limits and quotas. If a provider fails, the system must fall back to the next available provider.
 
 ### Output
 
@@ -50,9 +52,11 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 
 ### Configuration
 
-1. The system must provide a settings UI (accessible from system tray) to configure: hotkey, audio format, AI provider credentials, and prompt.
-2. The system must persist settings between sessions.
-3. The system must start minimized to the system tray / menu bar.
+1. The system must provide a settings UI (accessible from system tray) to configure: hotkey, audio format, AI provider credentials, prompt, and transcription language.
+2. The system must support a configurable transcription language (BCP-47 language code, e.g., `en-US`, `fr-FR`). The language is sent with each transcription request to the AI provider.
+3. The system must persist settings between sessions.
+4. The system must start minimized to the system tray / menu bar.
+5. The system must auto-start with the OS (Windows Startup / macOS Login Items) by default. The user can disable auto-start in settings.
 
 ## 5. Non-Goals (Out of Scope)
 
@@ -64,6 +68,7 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 - Not included: Streaming/real-time transcription during recording (audio is sent after recording stops)
 - Not included: User accounts, authentication, or multi-user support
 - Not included: Mobile platform support
+- Not included: Auto-update mechanism or distribution/installer tooling
 
 ## 6. Design Considerations
 
@@ -78,11 +83,13 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 - **Cross-platform:** Use .NET 10 (LTS) with Avalonia UI, plus platform-specific implementations for hotkey registration and clipboard/paste simulation.
 - **Global Hotkey:** Requires OS-level hotkey registration (Win32 API on Windows, CGEvent on macOS).
 - **Audio Recording:** Use platform audio APIs (e.g., NAudio on Windows, AVFoundation on macOS) to capture from the default microphone.
-- **Audio Encoding:** Encode to Opus (preferred for size/quality) or MP3 as fallback, using a library like Concentus (Opus).
+- **Audio Encoding:** Encode to Opus in an OGG container (OGG_OPUS format, compatible with Google Speech-to-Text). MP3 as fallback. Use Concentus + Concentus.OggFile for Opus encoding.
 - **Clipboard & Paste Simulation:** Use OS clipboard APIs to set text, then simulate Ctrl+V / Cmd+V via input simulation (SendInput on Windows, CGEvent on macOS). The transcription overwrites the current clipboard content (no restore).
 - **Notifications:** Use OS-native toast/notification APIs to surface errors (network, auth, device). On Windows use `ToastNotificationManager`; on macOS use `NSUserNotificationCenter` or `UNUserNotificationCenter`.
 - **AI Provider Abstraction:** Define `ITranscriptionService` interfaces. Register implementations via the .NET DI container.
+- **AI Provider Auth:** Google Speech-to-Text is accessed via API key (passed as a query parameter or header). No service account JSON files.
 - **Dependency Injection:** Use the built-in .NET DI container to register services, making provider swaps a configuration change.
+- **Auto-Start:** Register the app to start with the OS — Windows Startup registry / macOS Login Items. Configurable in settings.
 
 ## 8. Success Metrics
 
