@@ -18,6 +18,7 @@ npm run dev            # Start Vite dev server
 npm run tauri:dev      # Start full Tauri app in dev mode
 npm run build          # Build frontend only
 npm run tauri:build    # Build complete application
+npm run check          # Run svelte-check type checking
 ```
 
 ### Prerequisites
@@ -30,9 +31,17 @@ npm run tauri:build    # Build complete application
 
 ## Architecture
 
-- **Rust backend** (`src-tauri/`): Hotkey registration, audio recording/encoding, AI provider communication, clipboard & paste simulation, system tray
-- **Svelte 5 frontend** (`src/`): Settings UI accessible from system tray
+- **Rust backend** (`src-tauri/`):
+  - `audio/` — Recording (CPAL) and encoding (Opus/WAV with fallback)
+  - `ai/` — Provider abstraction, Gemini client, round-robin provider pool
+  - `hotkey/` — Global hotkey registration, conflict detection, key parsing
+  - `output/` — Clipboard management and paste simulation
+  - `config/` — Settings persistence (JSON), schema, built-in presets
+  - `tray.rs` — System tray with recording-state icon, tooltip, and notifications
+  - `logging.rs` — Structured logging with tracing
+- **Svelte 5 frontend** (`src/`): Settings UI (general, hotkey, audio, provider, preset tabs) accessible from system tray
 - **IPC**: Tauri command system with JSON/serde serialization
+- **Tauri plugins**: `notification`, `autostart`, `dialog`, `global-shortcut`
 
 ## Reference Implementation
 

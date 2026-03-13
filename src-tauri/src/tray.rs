@@ -28,10 +28,16 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let tray_icon = load_tray_icon(app);
 
-    let _tray = TrayIconBuilder::with_id("main")
+    let tray_builder = TrayIconBuilder::with_id("main")
         .icon(tray_icon)
         .tooltip("Pisum Langue")
-        .menu(&menu)
+        .menu(&menu);
+
+    // macOS: mark as template image so the system auto-inverts for dark/light mode
+    #[cfg(target_os = "macos")]
+    let tray_builder = tray_builder.icon_as_template(true);
+
+    let _tray = tray_builder
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "settings" => {
                 if let Some(window) = app.get_webview_window("main") {
@@ -122,13 +128,13 @@ pub fn set_recording_state(recording: bool) {
     if let Some(app) = handle.as_ref() {
         if let Some(tray) = app.tray_by_id("main") {
             let icon_name = if recording {
-                "tray-icon-recording.png"
+                get_recording_icon_name()
             } else {
-                &get_theme_icon_name()
+                get_idle_icon_name()
             };
 
             // Try resource dir first, then dev paths
-            let icon = try_load_icon_by_name(app, icon_name)
+            let icon = try_load_icon_by_name(app, &icon_name)
                 .unwrap_or_else(|| {
                     if recording {
                         Image::from_bytes(include_bytes!("../icons/tray-icon-recording.png"))
@@ -182,7 +188,7 @@ fn try_load_icon_by_name(app: &AppHandle, icon_name: &str) -> Option<Image<'stat
 
 /// Load the tray icon image.
 fn load_tray_icon(app: &tauri::App) -> Image<'static> {
-    let icon_name = get_theme_icon_name();
+    let icon_name = get_idle_icon_name();
 
     // Try to load from known paths
     if let Some(img) = try_load_icon_by_name(app.handle(), &icon_name) {
@@ -194,16 +200,37 @@ fn load_tray_icon(app: &tauri::App) -> Image<'static> {
         .expect("Failed to load embedded tray icon")
 }
 
-/// Get the appropriate icon filename based on system theme.
-fn get_theme_icon_name() -> String {
-    if is_dark_mode() {
-        "tray-icon-light.png".to_string()
-    } else {
-        "tray-icon-dark.png".to_string()
+/// Get the idle tray icon filename for the current platform.
+fn get_idle_icon_name() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: use template images — the system handles dark/light adaptation
+        "tray-iconTemplate.png".to_string()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Windows/Linux: use theme-specific icons
+        if is_dark_mode() {
+            "tray-icon-light.png".to_string()
+        } else {
+            "tray-icon-dark.png".to_string()
+        }
     }
 }
 
-/// Detect if the system is in dark mode.
+/// Get the recording tray icon filename for the current platform.
+fn get_recording_icon_name() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        "tray-iconTemplate-recording.png".to_string()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "tray-icon-recording.png".to_string()
+    }
+}
+
+/// Detect if the system is in dark mode (Windows/Linux only).
 #[cfg(target_os = "windows")]
 fn is_dark_mode() -> bool {
     use windows::Win32::System::Registry::{
@@ -227,12 +254,6 @@ fn is_dark_mode() -> bool {
     };
 
     result.is_ok() && data == 0
-}
-
-#[cfg(target_os = "macos")]
-fn is_dark_mode() -> bool {
-    // macOS: template icons auto-adapt, but we detect for non-template use
-    false
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
