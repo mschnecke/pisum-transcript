@@ -1,22 +1,7 @@
 {
   "version": "0.2.0",
   "configurations": [
-    {
-      "name": "Tauri: Debug",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}/src-tauri/target/debug/pisum-langue.exe",
-      "cwd": "${workspaceFolder}",
-      "preLaunchTask": "cargo: build",
-      "environment": [
-        { "name": "RUST_LOG", "value": "debug,pisum_langue_lib=trace" },
-        { "name": "RUST_BACKTRACE", "value": "1" }
-      ],
-      "sourceFileMap": {
-        "/rustc/*": "${env:USERPROFILE}/.rustup/toolchains/stable-x86_64-pc-windows-msvc/lib/rustlib/src/rust"
-      }
-    },
-    {
+{
       "name": "Tauri: Dev (full)",
       "type": "node",
       "request": "launch",
@@ -28,15 +13,6 @@
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
-    },
-    {
-      "name": "Rust: Attach (LLDB)",
-      "type": "lldb",
-      "request": "attach",
-      "pid": "${command:pickProcess}",
-      "sourceMap": {
-        "/rustc/*": "${env:USERPROFILE}/.rustup/toolchains/stable-x86_64-pc-windows-msvc/lib/rustlib/src/rust"
-      }
     }
   ]
 }

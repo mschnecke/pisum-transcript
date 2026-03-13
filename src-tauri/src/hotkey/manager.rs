@@ -19,8 +19,8 @@ use crate::tray;
 /// Maximum recording duration (10 minutes)
 const MAX_RECORDING_DURATION: Duration = Duration::from_secs(600);
 
-/// Minimum recording duration to trigger transcription (0.5 seconds)
-const MIN_RECORDING_DURATION: Duration = Duration::from_millis(500);
+/// Minimum recording duration to trigger transcription (50ms)
+const MIN_RECORDING_DURATION: Duration = Duration::from_millis(50);
 
 // Thread-local hotkey manager - must be used on the main thread only
 thread_local! {
