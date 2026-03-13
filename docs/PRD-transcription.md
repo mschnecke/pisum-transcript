@@ -1,8 +1,8 @@
-# PRD: AI-Driven Transcription
+# PRD: AI-Driven Dictation
 
 ## 1. Introduction/Overview
 
-Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets users dictate text anywhere on their system. The user holds a global hotkey to record (push-to-talk) and releases it to stop. The app records the speech to a compressed audio file (Opus preferred), sends it with an prompt to AI provider, copies the resulting text to the clipboard, and pastes it at the current cursor position.
+Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets users dictate text anywhere on their system. The user holds a global hotkey to record (push-to-talk) and releases it to stop. The app records the speech to a compressed audio file (Opus preferred), sends it with a prompt to an AI provider, copies the resulting text to the clipboard, and pastes it at the current cursor position.
 
 ## 2. Goals
 
@@ -36,7 +36,7 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 ### Transcription
 
 1. The system must send the recorded audio file to an AI provider (e.g., Gemini) along with a system prompt that instructs the model to transcribe the audio. The language, vocabulary hints, and formatting instructions are all part of the prompt — there is no separate language parameter.
-2. The system must support multiple named prompt presets (roles). Each preset has a name and a system prompt that controls transcription behavior (e.g., target language, vocabulary hints, formatting instructions, output style). The user selects the active preset from the system tray menu or settings UI.
+2. The system must support multiple named prompt presets (roles). Each preset has a name and a system prompt that controls transcription behavior (e.g., target language, vocabulary hints, formatting instructions, output style). The user selects the active preset from the settings UI.
 3. The system must ship with sensible built-in presets (e.g., "Transcribe DE" for German transcription, "Transcribe EN" for English transcription). Users can create, edit, and delete custom presets. Built-in presets cannot be deleted but can be edited.
 4. The AI provider must be abstracted behind a trait (`TranscriptionProvider`) so the implementation can be swapped without modifying consuming code.
 5. The system must distribute transcription requests across configured providers in round-robin order to balance API rate limits and quotas. If a provider fails, the system must fall back to the next available provider.
@@ -55,7 +55,7 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 ### Configuration
 
 1. The system must provide a settings UI (accessible from system tray) to configure: hotkey, audio format, AI provider credentials, and prompt presets.
-2. The system must persist settings between sessions.
+2. The system must persist all settings in a single JSON settings file in the user's home directory.
 3. The system must start minimized to the system tray / menu bar.
 4. The system must auto-start with the OS (Windows Startup / macOS Login Items) by default. The user can disable auto-start in settings.
 
@@ -64,7 +64,7 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 - Not included: A full windowed UI for reviewing, editing, or exporting transcriptions
 - Not included: File upload — the only input is live microphone recording
 - Not included: SRT, TXT, or DOCX export
-- Not included: Translation — though a user could create a prompt preset that includes translation instructions, this is not a first-class feature
+- Not included: Translation
 - Not included: Clipboard restoration — the transcription result overwrites the current clipboard content
 - Not included: Streaming/real-time transcription during recording (audio is sent after recording stops)
 - Not included: User accounts, authentication, or multi-user support
@@ -76,13 +76,15 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 - The app runs as a system tray (Windows) / menu bar (macOS) application with no main window
 - A small floating indicator or tray icon color change shows when recording is active
 - Settings are accessed via right-click on the tray/menu bar icon
-- The tray context menu shows available prompt presets for quick switching (radio-style selection with a checkmark on the active preset)
+- The active prompt preset is displayed in the tray tooltip. Preset switching is done through the settings UI
 - The interaction should feel instantaneous — minimal latency between stopping recording and text appearing at the cursor
 - Errors (network failure, invalid API key, no microphone, etc.) are surfaced as OS-native toast notifications (Windows toast / macOS NSUserNotification) so the user always gets feedback even when no app window is visible
 
 ## 7. Technical Considerations
 
 - **Cross-platform:** Use Tauri 2 (Rust backend) with Svelte 5 (TypeScript frontend), Vite 6, and Tailwind CSS. Platform-specific behavior is isolated via conditional compilation (`#[cfg(...)]`) in Rust modules.
+- **macOS Permissions:** Microphone access requires `NSMicrophoneUsageDescription` in `Info.plist`. macOS prompts the user on first use. Accessibility permission is required for paste simulation via `enigo`. A post-install notification guides the user to grant Accessibility permissions in System Settings.
+- **Logging:** Use file-based logging in the user's home directory (`~/.pisum-langue/logs/`). Use `tracing` crate with rotating log files.
 - **Global Hotkey:** Use the `global-hotkey` crate for cross-platform system-wide hotkey registration. The `GlobalHotKeyManager` runs on the main thread (thread-local), with an event loop in a background thread listening for press/release events.
 - **Audio Recording:** Use the `cpal` crate (Cross-Platform Audio Library) to capture from the default microphone on a dedicated thread. Supports f32, i16, and u16 sample formats with normalization to f32.
 - **Audio Encoding:** Encode to Opus in an OGG container (OGG_OPUS format) using `audiopus` for Opus encoding, `rubato` for high-quality sinc resampling to Opus-compatible sample rates, and the `ogg` crate for Ogg container wrapping. WAV via `hound` as fallback.
@@ -91,7 +93,7 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 - **AI Provider Abstraction:** Define a `TranscriptionProvider` Rust trait. Implementations are instantiated and managed via a `ProviderPool` that handles round-robin distribution and fallback.
 - **AI Provider:** Gemini (Google Generative Language API) is the default provider, accessed via API key. Default model: `gemini-2.5-flash-lite`. Audio is sent as base64-encoded inline data. No service account JSON files.
 - **System Tray:** Use Tauri's `TrayIconBuilder` with dynamic icon theming (light/dark detection). macOS uses `iconAsTemplate` for automatic theme adaptation. Windows detects dark mode via registry.
-- **Configuration:** JSON config files in the user's home directory. Dual-file system: fixed-location settings file and configurable-location config file, serialized via `serde`.
+- **Configuration:** Single JSON settings file in the user's home directory (`~/.pisum-langue.json`), serialized via `serde`. No config migration — if the schema changes, defaults are used for missing fields.
 - **Auto-Start:** Use `tauri-plugin-autostart` for OS startup integration — Windows Startup registry and macOS LaunchAgent. Configurable in settings.
 
 ## 8. Success Metrics

@@ -1,4 +1,4 @@
-# Implementation Plan: AI-Driven Transcription
+# Implementation Plan: AI-Driven Dictation
 
 > Generated from: `docs/PRD-transcription.md`
 > Date: 2026-03-13
@@ -14,7 +14,7 @@ The project is greenfield — no code exists yet. The tech stack is **Tauri 2 (R
 - **Tauri 2 over .NET/Avalonia**: Proven cross-platform approach from the reference repo, smaller binary size, native performance, built-in system tray support
 - **Push-to-talk via hotkey hold/release**: Unlike the reference repo's toggle pattern, Pisum Langue uses hold-to-record with a maximum 10-minute duration
 - **Gemini API**: Default provider (via API key, `gemini-2.5-flash-lite` model), behind a trait-based abstraction for swappability
-- **Prompt presets (roles)**: Named presets with system prompts, selectable from the tray menu. Built-in defaults for common languages; user-created custom presets
+- **Prompt presets (roles)**: Named presets with system prompts, selectable from the settings UI. Built-in defaults for common languages; user-created custom presets
 - **Round-robin provider load balancing**: Distribute requests across configured providers, falling back on failure
 
 ## 2. Architecture & Design
@@ -162,6 +162,7 @@ impl ProviderPool {
 | `src-tauri/src/hotkey/mod.rs` | Module exports |
 | `src-tauri/src/hotkey/manager.rs` | Hotkey registration, event loop, push-to-talk state machine |
 | `src-tauri/src/hotkey/parse.rs` | Hotkey string parsing (modifiers + key code) |
+| `src-tauri/src/hotkey/conflict.rs` | Hotkey conflict detection (app + system hotkeys) |
 | `src-tauri/src/audio/mod.rs` | Module exports |
 | `src-tauri/src/audio/recorder.rs` | Audio capture via `cpal` on dedicated thread |
 | `src-tauri/src/audio/encoder.rs` | Opus/OGG encoding with sinc resampling, WAV fallback |
@@ -171,7 +172,8 @@ impl ProviderPool {
 | `src-tauri/src/ai/pool.rs` | Round-robin provider pool with fallback |
 | `src-tauri/src/config/mod.rs` | Module exports |
 | `src-tauri/src/config/schema.rs` | Configuration data structures (serde) |
-| `src-tauri/src/config/manager.rs` | Load/save settings and config JSON files |
+| `src-tauri/src/config/manager.rs` | Load/save single settings JSON file |
+| `src-tauri/src/logging.rs` | File-based logging setup (`~/.pisum-langue/logs/`) |
 | `src-tauri/src/config/presets.rs` | Built-in preset definitions, preset CRUD helpers |
 | `src-tauri/src/output/mod.rs` | Module exports |
 | `src-tauri/src/output/clipboard.rs` | Clipboard write via `arboard` |
@@ -187,6 +189,7 @@ impl ProviderPool {
 | `src/lib/types.ts` | TypeScript type definitions mirroring Rust schemas |
 | `src/components/SettingsPage.svelte` | Main settings page layout |
 | `src/components/HotkeyConfig.svelte` | Hotkey configuration panel (capture + display) |
+| `src/components/HotkeyRecorder.svelte` | Hotkey capture widget (listens for keydown/keyup, shows modifiers in real-time) |
 | `src/components/ProviderConfig.svelte` | AI provider credentials and selection |
 | `src/components/AudioConfig.svelte` | Audio format and language settings |
 | `src/components/PresetConfig.svelte` | Prompt preset management (list, create, edit, delete) |
@@ -202,7 +205,7 @@ impl ProviderPool {
 
 | File Path | What Changes |
 |-----------|-------------|
-| `CLAUDE.md` | Update tech stack description from .NET to Tauri/Rust/Svelte, add build commands |
+| `CLAUDE.md` | Already updated to Tauri/Rust/Svelte tech stack |
 | `.gitignore` | Add Tauri/Rust/Node build artifacts (`target/`, `node_modules/`, `dist/`) |
 
 ## 5. Task Breakdown
@@ -296,15 +299,16 @@ impl ProviderPool {
   - `src-tauri/src/lib.rs` — Add tray setup in `.setup()` callback
   - `src-tauri/icons/` — Create tray icons (idle, recording) for light/dark themes
 - **Implementation details:**
-  - Right-click menu: Preset submenu (radio-style selection with checkmark on active preset), separator, "Settings" (shows hidden window), separator, "Quit"
-  - Preset submenu: list all presets (built-in + custom), clicking a preset sets it as active via `set_active_preset` command
+  - Right-click menu: "Settings" (shows hidden window), separator, "Quit"
+  - No preset submenu in tray — preset switching is done through the settings UI only
   - "Settings" click: `app.get_webview_window("main").unwrap().show()`
+  - Window close event (`CloseRequested`): hide the window back to tray instead of quitting the app
   - Tray icon changes color when recording (Phase 2 will activate this)
   - Store `AppHandle` in global `APP_HANDLE` for notifications from any module
   - macOS: use `iconAsTemplate` for automatic theme adaptation
   - Windows: detect dark mode via registry (`AppsUseLightTheme`) and load appropriate icon
 - **Dependencies:** Task 1.2
-- **Acceptance criteria:** App starts minimized to tray. Right-click shows preset submenu with active preset checked, "Settings", and "Quit". Clicking a preset switches the active preset. "Settings" opens window. "Quit" exits. No main window on launch.
+- **Acceptance criteria:** App starts minimized to tray. Right-click shows "Settings" and "Quit". "Settings" opens window. Closing the settings window hides it (back to tray). "Quit" exits. No main window on launch.
 
 ### Phase 2 Tasks: Global Hotkey & Audio Recording
 
@@ -334,7 +338,10 @@ impl ProviderPool {
   - `src-tauri/src/hotkey/parse.rs` — Parse hotkey binding to `global_hotkey::hotkey::HotKey`:
     - Modifier mapping: ctrl/control → Modifiers::CONTROL, alt → ALT, shift → SHIFT, meta/cmd/win/super → META
     - Key code mapping: A-Z, 0-9, F1-F12, special keys
-  - `src-tauri/src/lib.rs` — Add Tauri commands: `register_hotkey`, `unregister_hotkey`, `get_current_hotkey`
+  - `src-tauri/src/hotkey/conflict.rs` — Hotkey conflict detection:
+    - Check against app's own registered hotkeys
+    - Check against known system hotkeys (macOS: Cmd+Q, Cmd+W, Cmd+Tab, Cmd+Space, Cmd+Shift+3/4/5; Windows: Ctrl+Alt+Del, Alt+Tab, Alt+F4, Win+L/D/E/R/Tab, Ctrl+Shift+Esc)
+  - `src-tauri/src/lib.rs` — Add Tauri commands: `register_hotkey`, `unregister_hotkey`, `get_current_hotkey`, `check_conflict`, `check_system_conflict`
   - `src-tauri/Cargo.toml` — Add `global-hotkey = "0.6"`
 - **Implementation details:**
   - GlobalHotKeyManager is thread-local; registration must happen on main thread via `app.run_on_main_thread()`
@@ -344,7 +351,7 @@ impl ProviderPool {
     - `HotKeyState::Released` → call `handle_hotkey_release(app_handle)`
   - Only one hotkey registered at a time (single configurable hotkey per PRD)
 - **Dependencies:** Task 1.3
-- **Acceptance criteria:** Hotkey registers on startup. Press event logged. Release event logged. Hotkey works across all applications.
+- **Acceptance criteria:** Hotkey registers on startup. Press event logged. Release event logged. Hotkey works across all applications. Conflict detection warns about system hotkey clashes.
 
 #### Task 2.2: Audio Recording with cpal
 
@@ -428,8 +435,10 @@ impl ProviderPool {
   - Max recording duration: 10 minutes (600,000 ms). Spawn a timer thread on press; if it fires before release, auto-stop recording.
   - Guard against double-press: if already recording, ignore subsequent press events
   - On release with no active recording (edge case), do nothing gracefully
+  - Empty recording (press and immediately release, < 0.5s): skip transcription silently, restore tray icon, no notification
+  - macOS microphone permission: `cpal` will trigger the system permission prompt on first use. If denied, `default_input_device()` returns `None` → show error notification guiding user to System Settings > Privacy & Security > Microphone
 - **Dependencies:** Tasks 2.1, 2.2, 2.3
-- **Acceptance criteria:** Hold hotkey → tray shows recording → release → Opus data produced. Recording auto-stops at 10 minutes. Tray icon updates correctly.
+- **Acceptance criteria:** Hold hotkey → tray shows recording → release → Opus data produced. Recording auto-stops at 10 minutes. Tray icon updates correctly. Quick press-release (< 0.5s) is silently ignored.
 
 ### Phase 3 Tasks: AI Provider Abstraction & Gemini
 
@@ -539,8 +548,9 @@ impl ProviderPool {
   - Round-robin: `AtomicUsize` counter, mod by provider count
   - Fallback: on failure, try next provider in sequence until all exhausted
   - `rebuild()`: called when settings change, constructs new provider instances from config
+  - Initialized on first launch during app setup (in `lib.rs` `.setup()` callback) from the loaded settings. If no providers are configured (e.g., first launch before API key entry), the pool is empty and `transcribe()` returns an error prompting the user to configure a provider
 - **Dependencies:** Task 3.2
-- **Acceptance criteria:** Requests cycle across providers. Failed provider is skipped. All-fail returns aggregated error.
+- **Acceptance criteria:** Requests cycle across providers. Failed provider is skipped. All-fail returns aggregated error. Empty pool returns clear "no providers configured" error.
 
 #### Task 3.4: Wire Transcription into Recording Pipeline
 
@@ -628,12 +638,6 @@ impl ProviderPool {
     pub struct AppSettings {
         pub start_with_system: bool,
         pub show_tray_notifications: bool,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct AppConfig {
-        pub version: String,
         pub hotkey: HotkeyBinding,
         pub audio_format: AudioFormat,          // Opus or Wav
         pub presets: Vec<Preset>,               // Named prompt presets (roles)
@@ -671,20 +675,18 @@ impl ProviderPool {
     ```
   - `src-tauri/src/config/manager.rs` — File I/O:
     ```rust
-    const SETTINGS_FILE: &str = ".pisum-langue-settings.json";   // ~/
-    const CONFIG_DIR: &str = ".pisum-langue";                     // ~/
-    const CONFIG_FILE: &str = "config.json";                      // ~/.pisum-langue/
+    const SETTINGS_FILE: &str = ".pisum-langue.json";   // ~/
 
-    pub fn init() -> Result<(), AppError> { /* create dirs, load defaults */ }
+    pub fn init() -> Result<(), AppError> { /* create file with defaults if missing */ }
     pub fn load_settings() -> Result<AppSettings, AppError> { ... }
     pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> { ... }
-    pub fn load_config() -> Result<AppConfig, AppError> { ... }
-    pub fn save_config(config: &AppConfig) -> Result<(), AppError> { ... }
     ```
   - `src-tauri/Cargo.toml` — Add `dirs = "5"`, `uuid = { version = "1", features = ["v4"] }`
 - **Implementation details:**
-  - Dual-file system: settings in fixed location, config in configurable directory
-  - Auto-create directories and default config on first run
+  - Single settings file: `~/.pisum-langue.json` contains all configuration (settings, hotkey, presets, providers)
+  - No config migration logic — use `#[serde(default)]` on all fields so missing fields get defaults when schema changes
+  - API keys are stored in plaintext in the settings file (accepted tradeoff)
+  - Auto-create file with defaults on first run
   - Default hotkey: Ctrl+Shift+Space (Windows) / Cmd+Shift+Space (macOS)
   - Default audio format: Opus
   - Built-in presets loaded from `presets.rs` on first run and merged on subsequent loads (see Task 5.1b)
@@ -733,19 +735,13 @@ impl ProviderPool {
   - `src-tauri/src/lib.rs` — Add Tauri commands:
     ```rust
     #[tauri::command]
-    async fn load_config() -> Result<FullConfig, String> { ... }
-
-    #[tauri::command]
-    async fn save_config(config: AppConfig) -> Result<(), String> { ... }
+    async fn load_settings() -> Result<AppSettings, String> { ... }
 
     #[tauri::command]
     async fn save_settings(settings: AppSettings) -> Result<(), String> { ... }
 
     #[tauri::command]
     async fn test_provider(provider: ProviderConfig) -> Result<bool, String> { ... }
-
-    #[tauri::command]
-    async fn capture_hotkey() -> Result<HotkeyBinding, String> { ... }
 
     #[tauri::command]
     async fn get_presets() -> Result<Vec<Preset>, String> { ... }
@@ -770,9 +766,6 @@ impl ProviderPool {
     export interface AppSettings {
       startWithSystem: boolean;
       showTrayNotifications: boolean;
-    }
-    export interface AppConfig {
-      version: string;
       hotkey: HotkeyBinding;
       audioFormat: 'opus' | 'wav';
       presets: Preset[];
@@ -787,23 +780,23 @@ impl ProviderPool {
     }
     export interface ProviderConfig { ... }
     export interface HotkeyBinding { modifiers: string[]; key: string; }
-    export interface FullConfig { settings: AppSettings; config: AppConfig; }
     ```
   - `src/lib/commands.ts` — Typed invoke wrappers:
     ```typescript
     import { invoke } from '@tauri-apps/api/core';
-    export async function loadConfig(): Promise<FullConfig> { return invoke('load_config'); }
-    export async function saveConfig(config: AppConfig): Promise<void> { ... }
+    export async function loadSettings(): Promise<AppSettings> { return invoke('load_settings'); }
+    export async function saveSettings(settings: AppSettings): Promise<void> { ... }
     export async function testProvider(provider: ProviderConfig): Promise<boolean> { ... }
     export async function getPresets(): Promise<Preset[]> { return invoke('get_presets'); }
     export async function setActivePreset(presetId: string): Promise<void> { ... }
     export async function savePreset(preset: Preset): Promise<void> { ... }
     export async function deletePreset(presetId: string): Promise<void> { ... }
+    export async function checkConflict(binding: HotkeyBinding): Promise<boolean> { ... }
+    export async function checkSystemConflict(binding: HotkeyBinding): Promise<boolean> { ... }
     ```
   - `src/stores/settings.ts` — Svelte writable store:
     ```typescript
     import { writable } from 'svelte/store';
-    export const config = writable<AppConfig | null>(null);
     export const settings = writable<AppSettings | null>(null);
     export async function initSettings() { ... }
     ```
@@ -815,7 +808,14 @@ impl ProviderPool {
 - **Files to create/modify:**
   - `src/App.svelte` — Load config on mount, render SettingsPage
   - `src/components/SettingsPage.svelte` — Main layout with sections: Hotkey, Audio, Provider, Presets, General
-  - `src/components/HotkeyConfig.svelte` — Hotkey display + "Record New Hotkey" button (calls `capture_hotkey` command)
+  - `src/components/HotkeyConfig.svelte` — Hotkey display + "Record New Hotkey" button that opens inline HotkeyRecorder
+  - `src/components/HotkeyRecorder.svelte` — Hotkey capture widget (based on reference repo pattern):
+    - Enters recording mode on click, captures `onkeydown`/`onkeyup` events
+    - Tracks modifiers (Ctrl, Alt, Shift, Meta) in real-time, displays them as user presses
+    - Requires at least one modifier + a non-modifier key to complete capture
+    - Maps key names (single char → uppercase, `Arrow*` → strip prefix)
+    - Calls `checkConflict` and `checkSystemConflict` to warn about clashes before saving
+    - Shows "Press a key combination..." prompt while recording
   - `src/components/AudioConfig.svelte` — Audio format toggle (Opus/WAV)
   - `src/components/ProviderConfig.svelte` — Provider list: add/remove/edit providers, API key input, model selection, "Test Connection" button
   - `src/components/PresetConfig.svelte` — Preset management:
@@ -910,12 +910,35 @@ impl ProviderPool {
 - **Dependencies:** Task 2.4
 - **Acceptance criteria:** Recording auto-stops after 10 minutes. Transcription proceeds normally after auto-stop.
 
+#### Task 6.4: File-Based Logging
+
+- **Files to create/modify:**
+  - `src-tauri/src/logging.rs` — Logging setup:
+    - Use `tracing` + `tracing-subscriber` + `tracing-appender` for structured file logging
+    - Log directory: `~/.pisum-langue/logs/`
+    - Rotating log files (daily rotation, keep 7 days)
+    - Log levels: ERROR for user-facing failures, WARN for retries/fallbacks, INFO for pipeline events, DEBUG for development
+  - `src-tauri/src/lib.rs` — Initialize logging in app setup before other modules
+  - `src-tauri/Cargo.toml` — Add `tracing = "0.1"`, `tracing-subscriber = "0.3"`, `tracing-appender = "0.2"`
+- **Dependencies:** Task 1.2
+- **Acceptance criteria:** App writes structured logs to `~/.pisum-langue/logs/`. Logs rotate daily. Old logs cleaned up after 7 days.
+
+#### Task 6.5: macOS Post-Install Permission Notification
+
+- **Files to create/modify:**
+  - `packages/macos/postinstall` — Shell script for macOS installer:
+    - Display OS notification guiding user to grant Accessibility permissions in System Settings > Privacy & Security > Accessibility
+    - Uses `osascript -e 'display notification ...'`
+  - `src-tauri/tauri.conf.json` — Reference postinstall script in macOS bundle config
+- **Dependencies:** Task 1.2
+- **Acceptance criteria:** After macOS installation, user sees notification about Accessibility permissions.
+
 ## 6. Data Model Changes
 
-No database is used. All state is persisted in JSON files:
+No database is used. All state is persisted in a single JSON file:
 
-- `~/.pisum-langue-settings.json` — App settings (auto-start, notifications)
-- `~/.pisum-langue/config.json` — Hotkey, audio format, presets (built-in + custom), active preset ID, provider credentials
+- `~/.pisum-langue.json` — All settings: hotkey, audio format, presets (built-in + custom), active preset ID, provider credentials, auto-start, notifications
+- `~/.pisum-langue/logs/` — Rotating log files
 
 ## 7. API Changes
 
@@ -939,17 +962,18 @@ No HTTP API is exposed. The application communicates with external APIs:
 - **Response:** `{ "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }`
 
 ### Tauri IPC Commands (internal)
+
 | Command | Direction | Purpose |
 |---------|-----------|---------|
-| `load_config` | Frontend → Backend | Load settings + config |
-| `save_config` | Frontend → Backend | Persist config changes |
-| `save_settings` | Frontend → Backend | Persist settings changes |
+| `load_settings` | Frontend → Backend | Load all settings |
+| `save_settings` | Frontend → Backend | Persist all settings |
 | `register_hotkey` | Frontend → Backend | Register new hotkey |
 | `unregister_hotkey` | Frontend → Backend | Remove current hotkey |
-| `capture_hotkey` | Frontend → Backend | Enter hotkey capture mode |
+| `check_conflict` | Frontend → Backend | Check hotkey conflict with app |
+| `check_system_conflict` | Frontend → Backend | Check hotkey conflict with OS |
 | `test_provider` | Frontend → Backend | Test API key validity |
 | `get_presets` | Frontend → Backend | Get all presets (built-in + custom) |
-| `set_active_preset` | Frontend → Backend | Set active preset by ID, rebuild tray menu |
+| `set_active_preset` | Frontend → Backend | Set active preset by ID |
 | `save_preset` | Frontend → Backend | Create or update a preset |
 | `delete_preset` | Frontend → Backend | Delete a custom preset (rejects built-in) |
 | `set_autostart` | Frontend → Backend | Toggle OS auto-start |
@@ -970,6 +994,9 @@ No HTTP API is exposed. The application communicates with external APIs:
 | `reqwest` | 0.12 | HTTP client | Uses rustls (no OpenSSL dep) |
 | `arboard` | 3 | Clipboard access | Cross-platform |
 | `enigo` | 0.3 | Input simulation | Requires accessibility on macOS |
+| `tracing` | 0.1 | Structured logging | Mature, widely used |
+| `tracing-subscriber` | 0.3 | Log output formatting | Companion to tracing |
+| `tracing-appender` | 0.2 | File-based log output with rotation | Companion to tracing |
 | `svelte` | 5.x | UI framework | Latest major version |
 | `tailwindcss` | 3.x | CSS framework | Stable |
 | Gemini API | v1beta | AI transcription via generateContent | Rate limits, requires billing |
@@ -978,11 +1005,12 @@ No HTTP API is exposed. The application communicates with external APIs:
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| macOS Accessibility permission required for `enigo` | Paste simulation fails silently | Detect permission status on startup; show notification guiding user to System Settings |
-| `audiopus` requires C compiler for libopus | Build fails on clean machines | Document build prerequisites; WAV fallback ensures app works even if Opus build fails |
+| macOS Accessibility permission required for `enigo` | Paste simulation fails silently | Post-install notification guides user to System Settings > Privacy & Security > Accessibility |
+| macOS Microphone permission required for `cpal` | Recording fails | macOS prompts on first use; if denied, show error notification guiding user to System Settings > Privacy & Security > Microphone |
+| `audiopus` requires C compiler for libopus | Build fails on clean machines | Document build prerequisites (Visual Studio Build Tools on Windows, Xcode CLI Tools + `brew install opus` on macOS); WAV fallback ensures app works even if Opus build fails |
 | Gemini API rate limits | Transcription fails under heavy use | Round-robin multiple API keys; exponential backoff; clear error notification |
-| Hotkey conflicts with other apps | Hotkey registration fails | Detect conflicts during registration; suggest alternative hotkey |
-| Large audio files (10 min recording) | API rejects or times out | Use `longrunningrecognize` for audio > 1 min; Opus compression keeps file size manageable (~1.8 MB for 10 min at 24kbps) |
+| Hotkey conflicts with other apps | Hotkey registration fails | Conflict detection against app and system hotkeys; suggest alternative hotkey |
+| Large audio files (10 min recording) | API timeout | Opus compression keeps file size manageable (~1.8 MB for 10 min at 24kbps) |
 
 ### Assumptions
 
@@ -994,10 +1022,11 @@ No HTTP API is exposed. The application communicates with external APIs:
 
 ### Unit Tests (Rust)
 - **Audio encoder:** Verify Opus output is valid Ogg/Opus. Verify WAV fallback produces valid WAV. Test resampling from various input rates.
-- **Config manager:** Load/save roundtrip. Default creation. Invalid JSON handling. Built-in preset merge on load (missing built-in presets added, user edits preserved).
+- **Config manager:** Load/save roundtrip. Default creation. Invalid JSON handling. Missing fields get defaults via `#[serde(default)]`. Built-in preset merge on load (missing built-in presets added, user edits preserved).
 - **Preset manager:** Create custom preset. Edit preset. Delete custom preset. Reject deletion of built-in preset. Get active preset by ID. Fallback when active preset ID is invalid.
 - **Hotkey parser:** Valid hotkey strings parse correctly. Invalid strings return errors.
-- **Provider pool:** Round-robin index advances. Fallback skips failed providers. All-fail returns error.
+- **Provider pool:** Round-robin index advances. Fallback skips failed providers. All-fail returns error. Empty pool returns "no providers configured" error.
+- **Hotkey conflict:** Detect app-level conflicts. Detect system hotkey conflicts on Windows and macOS.
 
 ### Integration Tests (Rust)
 - **Gemini provider:** Send known audio file, verify transcription (requires API key; skip in CI without key).
@@ -1010,14 +1039,15 @@ No HTTP API is exposed. The application communicates with external APIs:
 - Use invalid API key → verify error notification on transcription attempt
 - Change hotkey in settings → verify old hotkey stops working, new one activates
 - Test in multiple apps: browser text field, VS Code editor, Notepad, chat applications
-- Switch preset from tray menu → dictate → verify transcription uses new preset's prompt
-- Create custom preset in settings → verify it appears in tray menu
-- Delete custom preset → verify it disappears from tray menu
+- Switch preset in settings UI → dictate → verify transcription uses new preset's prompt
+- Create custom preset in settings → verify it appears in preset list
+- Delete custom preset → verify it disappears from preset list
 - Edit built-in preset prompt → verify edit persists across restart
+- Close settings window → verify it hides to tray (does not quit app)
 
 ### Edge Cases
 - No microphone connected → error notification on hotkey press
-- Empty recording (press and immediately release) → handle gracefully (skip transcription or notify)
+- Empty recording (press and immediately release, < 0.5s) → skip silently, no notification
 - Multiple rapid press/release cycles → no crash or resource leak
 - Very long utterance (10 min) → encoding and API call succeed
 - Non-ASCII transcription results → clipboard and paste handle Unicode correctly
@@ -1035,14 +1065,14 @@ No HTTP API is exposed. The application communicates with external APIs:
 | §4.1 #5 | Max recording duration 10 minutes | 6.3 | Timer thread auto-stops recording |
 | §4.1 #6 | Audio/visual feedback for recording state | 1.3, 2.4 | Tray icon changes during recording |
 | §4.2 #1 | Send audio + active preset's system prompt to AI provider | 3.2, 3.4 | Gemini with system prompt from active preset |
-| §4.2 #2 | Multiple named prompt presets (roles) with system prompts, selectable from tray menu | 5.1, 5.1b, 5.4, 1.3 | `Preset` struct, tray preset submenu, PresetConfig UI |
+| §4.2 #2 | Multiple named prompt presets (roles) with system prompts, selectable from settings UI | 5.1, 5.1b, 5.4 | `Preset` struct, PresetConfig UI |
 | §4.2 #3 | Built-in presets for common languages; users can create/edit/delete custom presets | 5.1b, 5.4 | `get_builtin_presets()`, built-in presets editable but not deletable |
 | §4.2 #4 | AI provider behind interface (swappable) | 3.1 | `TranscriptionProvider` trait |
 | §4.2 #5 | Round-robin distribution with fallback | 3.3 | `ProviderPool` with atomic index |
 | §4.3 #1 | Copy transcription to clipboard | 4.1 | `arboard` crate |
 | §4.3 #2 | Simulate paste (Ctrl+V / Cmd+V) | 4.2 | `enigo` crate |
 | §4.4 #1 | Settings UI from system tray | 1.3, 5.4 | Tray menu → hidden Settings window |
-| §4.4 #2 | Persist settings between sessions | 5.1 | JSON files in user home directory |
+| §4.4 #2 | Persist settings between sessions | 5.1 | Single JSON file in user home directory |
 | §4.4 #3 | Start minimized to system tray | 1.3 | Window `visible: false` in tauri.conf.json |
 | §4.4 #4 | Auto-start with OS (configurable) | 6.2 | `tauri-plugin-autostart` |
 | §4.5 #1 | Detect network unavailable / API failure | 6.1 | reqwest error handling + retry logic |
@@ -1057,7 +1087,7 @@ No HTTP API is exposed. The application communicates with external APIs:
 | US-2 | Transcribed text appears at cursor position | 4.1, 4.2, 4.3 | Yes |
 | US-3 | Transcribed text copied to clipboard as fallback | 4.1 | Yes |
 | US-4 | Configure AI provider and model | 5.1, 5.4 | Yes |
-| US-5 | Switch between prompt presets for different contexts | 1.3, 5.1b, 5.4 | Yes |
+| US-5 | Switch between prompt presets for different contexts | 5.1b, 5.4 | Yes |
 
 ### Success Metrics
 
