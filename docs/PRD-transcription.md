@@ -28,7 +28,7 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 
 1. The system must register a configurable global hotkey that works across all applications on Windows and macOS.
 2. The system must capture audio from the default system microphone when the hotkey is activated.
-3. The system must encode the captured audio to Opus in an OGG container (OGG_OPUS) for Gemini API compatibility. WAV is available as a fallback format.
+3. The system must encode the captured audio using the format selected in settings (Opus in OGG container or WAV). Opus (OGG_OPUS) is the default for Gemini API compatibility. If the selected format's encoding fails at runtime (e.g., Opus library unavailable), the system must fall back to WAV and log a warning.
 4. The system must stop recording when the hotkey is released (push-to-talk mode).
 5. The system must enforce a maximum recording duration of 10 minutes. Recording auto-stops when the limit is reached.
 6. The system must provide audio/visual feedback (e.g., system tray icon change, small overlay) to indicate recording state.
@@ -36,7 +36,7 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 ### Transcription
 
 1. The system must send the recorded audio file to an AI provider (e.g., Gemini) along with a system prompt that instructs the model to transcribe the audio. The language, vocabulary hints, and formatting instructions are all part of the prompt — there is no separate language parameter.
-2. The system must support multiple named prompt presets (roles). Each preset has a name and a system prompt that controls transcription behavior (e.g., target language, vocabulary hints, formatting instructions, output style). The user selects the active preset from the settings UI.
+2. The system must support multiple named prompt presets (roles). Each preset has a name and a system prompt that controls transcription behavior (e.g., target language, vocabulary hints, formatting instructions, output style). The user selects the active preset from the settings UI. If the active preset ID references a deleted or nonexistent preset, the system must fall back to the first built-in preset (e.g., "Transcribe DE") and update the persisted setting.
 3. The system must ship with sensible built-in presets (e.g., "Transcribe DE" for German transcription, "Transcribe EN" for English transcription). Users can create, edit, and delete custom presets. Built-in presets cannot be deleted but can be edited.
 4. The AI provider must be abstracted behind a trait (`TranscriptionProvider`) so the implementation can be swapped without modifying consuming code.
 5. The system must distribute transcription requests across configured providers in round-robin order to balance API rate limits and quotas. If a provider fails, the system must fall back to the next available provider.
@@ -58,6 +58,7 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 2. The system must persist all settings in a single JSON settings file in the user's home directory.
 3. The system must start minimized to the system tray / menu bar.
 4. The system must auto-start with the OS (Windows Startup / macOS Login Items) by default. The user can disable auto-start in settings.
+5. On first launch (no API key configured), the system must automatically open the settings window and show a notification guiding the user to configure an AI provider. The hotkey must still register but transcription attempts must return a clear "no provider configured" error notification.
 
 ## 5. Non-Goals (Out of Scope)
 
@@ -76,6 +77,7 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 - The app runs as a system tray (Windows) / menu bar (macOS) application with no main window
 - A small floating indicator or tray icon color change shows when recording is active
 - Settings are accessed via right-click on the tray/menu bar icon
+- Closing the settings window hides it back to the system tray instead of quitting the app. The app only exits via the "Quit" option in the tray menu
 - The active prompt preset is displayed in the tray tooltip. Preset switching is done through the settings UI
 - The interaction should feel instantaneous — minimal latency between stopping recording and text appearing at the cursor
 - Errors (network failure, invalid API key, no microphone, etc.) are surfaced as OS-native toast notifications (Windows toast / macOS NSUserNotification) so the user always gets feedback even when no app window is visible
@@ -109,5 +111,5 @@ Pisum Langue is a cross-platform desktop utility (Windows and macOS) that lets u
 - [x] Should the hotkey default to push-to-talk (hold to record) or toggle (press to start/stop)? -> push-to-talk only
 - [x] What is the maximum recording duration to support? -> 10 min
 - [x] Which AI provider should be the default implementation (OpenAI Whisper, Azure, Google Gemini)? -> Google Gemini (`gemini-2.5-flash-lite`)
-- [x] Should the app support multiple prompt presets (e.g., "medical terminology", "casual conversation")? -> Yes, with built-in defaults and user-defined custom presets. Active preset selectable from tray menu.
+- [x] Should the app support multiple prompt presets (e.g., "medical terminology", "casual conversation")? -> Yes, with built-in defaults and user-defined custom presets. Active preset selectable from the settings UI.
 - [x] How should clipboard restoration work — always restore, or make it configurable? -> No clipboard restoration; transcription overwrites clipboard

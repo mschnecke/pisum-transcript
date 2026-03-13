@@ -125,9 +125,10 @@ impl ProviderPool {
 
 ## 3. Phases & Milestones
 
-### Phase 1: Project Scaffolding & System Tray
-**Goal:** Bootable Tauri 2 app running as a system tray/menu bar application with no main window.
-**Deliverable:** App starts minimized to tray, shows right-click menu with "Settings" and "Quit" options. Settings opens a hidden window.
+### Phase 1: Project Scaffolding, Logging & System Tray
+
+**Goal:** Bootable Tauri 2 app running as a system tray/menu bar application with no main window. File-based logging initialized early so all subsequent phases have logging from the start.
+**Deliverable:** App starts minimized to tray, shows right-click menu with "Settings" and "Quit" options. Settings opens a hidden window. Structured logs written to `~/.pisum-langue/logs/`.
 
 ### Phase 2: Global Hotkey & Audio Recording
 **Goal:** Register a configurable global hotkey. Hold-to-record captures audio from the default microphone and encodes to Opus/OGG.
@@ -143,9 +144,10 @@ impl ProviderPool {
 
 ### Phase 5: Settings UI
 **Goal:** Svelte 5 settings UI accessible from system tray for configuring hotkey, audio format, AI provider credentials, and prompt presets. Built-in presets for common languages; user-created custom presets.
-**Deliverable:** All configuration options from PRD §4.4 are functional and persisted. Preset management (create, edit, delete) works. Active preset selectable from tray menu and settings UI.
+**Deliverable:** All configuration options from PRD §4.4 are functional and persisted. Preset management (create, edit, delete) works. Active preset selectable from settings UI.
 
 ### Phase 6: Error Handling, Notifications & Auto-Start
+
 **Goal:** OS-native toast notifications for all error conditions. Auto-start with OS. Recording duration limit.
 **Deliverable:** Every failure in the pipeline surfaces a notification. App can auto-start on login.
 
@@ -181,6 +183,7 @@ impl ProviderPool {
 | `src-tauri/Cargo.toml` | Rust dependencies |
 | `src-tauri/build.rs` | Tauri build script |
 | `src-tauri/tauri.conf.json` | Tauri app configuration |
+| `src-tauri/capabilities/default.json` | Tauri 2 capability-based permissions for plugins |
 | `src-tauri/icons/` | App icons and tray icons (light/dark variants) |
 | `src/App.svelte` | Root Svelte component (settings UI shell) |
 | `src/main.ts` | Svelte app entry point |
@@ -210,7 +213,7 @@ impl ProviderPool {
 
 ## 5. Task Breakdown
 
-### Phase 1 Tasks: Project Scaffolding & System Tray
+### Phase 1 Tasks: Project Scaffolding, Logging & System Tray
 
 #### Task 1.1: Initialize Tauri 2 + Svelte 5 Project
 
@@ -278,8 +281,28 @@ impl ProviderPool {
       }
     }
     ```
+  - `src-tauri/capabilities/default.json` — Tauri 2 capability-based permissions:
+    ```json
+    {
+      "identifier": "default",
+      "description": "Default capabilities for Pisum Langue",
+      "windows": ["main"],
+      "permissions": [
+        "core:default",
+        "notification:default",
+        "notification:allow-notify",
+        "notification:allow-request-permission",
+        "autostart:default",
+        "autostart:allow-enable",
+        "autostart:allow-disable",
+        "autostart:allow-is-enabled"
+      ]
+    }
+    ```
+- **Implementation details:**
+  - Tauri 2 uses a capability-based permission system. All plugin permissions must be declared in `src-tauri/capabilities/` for the frontend to invoke them via IPC
 - **Dependencies:** Task 1.1
-- **Acceptance criteria:** `cargo tauri dev` launches the app; `cargo build` succeeds
+- **Acceptance criteria:** `cargo tauri dev` launches the app; `cargo build` succeeds. Capabilities file includes all required plugin permissions.
 
 #### Task 1.3: System Tray with Menu
 
@@ -295,6 +318,7 @@ impl ProviderPool {
     pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> { ... }
     pub fn send_notification(title: &str, message: &str) { ... }
     pub fn set_recording_state(recording: bool) { ... }
+    pub fn set_tray_tooltip(preset_name: &str) { ... }
     ```
   - `src-tauri/src/lib.rs` — Add tray setup in `.setup()` callback
   - `src-tauri/icons/` — Create tray icons (idle, recording) for light/dark themes
@@ -304,11 +328,28 @@ impl ProviderPool {
   - "Settings" click: `app.get_webview_window("main").unwrap().show()`
   - Window close event (`CloseRequested`): hide the window back to tray instead of quitting the app
   - Tray icon changes color when recording (Phase 2 will activate this)
+  - Tray tooltip displays the active preset name (e.g., "Pisum Langue — Transcribe DE"). Updated via `set_tray_tooltip()` on startup and whenever the active preset changes
   - Store `AppHandle` in global `APP_HANDLE` for notifications from any module
   - macOS: use `iconAsTemplate` for automatic theme adaptation
   - Windows: detect dark mode via registry (`AppsUseLightTheme`) and load appropriate icon
 - **Dependencies:** Task 1.2
-- **Acceptance criteria:** App starts minimized to tray. Right-click shows "Settings" and "Quit". "Settings" opens window. Closing the settings window hides it (back to tray). "Quit" exits. No main window on launch.
+- **Acceptance criteria:** App starts minimized to tray. Right-click shows "Settings" and "Quit". "Settings" opens window. Closing the settings window hides it (back to tray). "Quit" exits. No main window on launch. Tray tooltip displays the active preset name.
+
+#### Task 1.4: File-Based Logging
+
+- **Files to create/modify:**
+  - `src-tauri/src/logging.rs` — Logging setup:
+    - Use `tracing` + `tracing-subscriber` + `tracing-appender` for structured file logging
+    - Log directory: `~/.pisum-langue/logs/`
+    - Rotating log files (daily rotation, keep 7 days)
+    - Log levels: ERROR for user-facing failures, WARN for retries/fallbacks, INFO for pipeline events, DEBUG for development
+  - `src-tauri/src/lib.rs` — Initialize logging in app setup **before** other modules (tray, hotkey, etc.)
+  - `src-tauri/Cargo.toml` — Add `tracing = "0.1"`, `tracing-subscriber = "0.3"`, `tracing-appender = "0.2"`
+- **Implementation details:**
+  - Logging must be initialized as the first step in the `.setup()` callback so that all subsequent module initialization is logged
+  - Console output in dev mode (`#[cfg(debug_assertions)]`), file-only in release
+- **Dependencies:** Task 1.2
+- **Acceptance criteria:** App writes structured logs to `~/.pisum-langue/logs/`. Logs rotate daily. Old logs cleaned up after 7 days. All Phase 2+ work benefits from logging.
 
 ### Phase 2 Tasks: Global Hotkey & Audio Recording
 
@@ -403,11 +444,13 @@ impl ProviderPool {
     hound = "3.5"
     ```
 - **Implementation details:**
+  - The encoder respects the user's `audio_format` setting from config. If set to Opus, encode to Opus; if set to WAV, encode to WAV directly (no Opus attempt)
+  - Runtime fallback: if the selected format's encoding fails (e.g., Opus library unavailable), fall back to the other format and log a warning via `tracing::warn!`
   - Resampling pipeline: detect if sample rate is Opus-compatible (8k/12k/16k/24k/48k), resample via `rubato::SincFixedIn` if not
   - Sinc parameters: `sinc_len: 256`, `f_cutoff: 0.95`, `oversampling_factor: 256`, `WindowFunction::BlackmanHarris2`
   - Opus encoding: `Application::Voip`, 24kbps bitrate, 20ms frames
   - Ogg wrapping: OpusHead header, OpusTags header (vendor: "pisum-langue"), audio packets with 48kHz granule positions
-  - WAV fallback: 16-bit PCM via `hound` if Opus encoding fails
+  - WAV encoding: 16-bit PCM via `hound`
 - **Dependencies:** Task 2.2
 - **Acceptance criteria:** Recorded audio encodes to valid Ogg/Opus. File plays correctly in external player. WAV fallback produces valid WAV.
 
@@ -434,6 +477,7 @@ impl ProviderPool {
 - **Implementation details:**
   - Max recording duration: 10 minutes (600,000 ms). Spawn a timer thread on press; if it fires before release, auto-stop recording.
   - Guard against double-press: if already recording, ignore subsequent press events
+  - Guard against concurrent transcription: if a transcription API call is already in-flight from a previous recording, ignore the new press event and show a "transcription in progress" tray notification. Use an `Arc<AtomicBool>` flag (`is_transcribing`) to track this state
   - On release with no active recording (edge case), do nothing gracefully
   - Empty recording (press and immediately release, < 0.5s): skip transcription silently, restore tray icon, no notification
   - macOS microphone permission: `cpal` will trigger the system permission prompt on first use. If denied, `default_input_device()` returns `None` → show error notification guiding user to System Settings > Privacy & Security > Microphone
@@ -547,7 +591,7 @@ impl ProviderPool {
 - **Implementation details:**
   - Round-robin: `AtomicUsize` counter, mod by provider count
   - Fallback: on failure, try next provider in sequence until all exhausted
-  - `rebuild()`: called when settings change, constructs new provider instances from config
+  - `rebuild()`: called when settings change, constructs new provider instances from config. Uses a write lock, which will block until any in-flight `transcribe()` read lock is released. This is acceptable because settings changes are infrequent and user-initiated
   - Initialized on first launch during app setup (in `lib.rs` `.setup()` callback) from the loaded settings. If no providers are configured (e.g., first launch before API key entry), the pool is empty and `transcribe()` returns an error prompting the user to configure a provider
 - **Dependencies:** Task 3.2
 - **Acceptance criteria:** Requests cycle across providers. Failed provider is skipped. All-fail returns aggregated error. Empty pool returns clear "no providers configured" error.
@@ -691,8 +735,10 @@ impl ProviderPool {
   - Default audio format: Opus
   - Built-in presets loaded from `presets.rs` on first run and merged on subsequent loads (see Task 5.1b)
   - Default active preset: `"de-transcribe"`
+  - Active preset fallback: if `active_preset_id` references a nonexistent preset (e.g., deleted custom preset), fall back to the first built-in preset (`"de-transcribe"`) and persist the corrected setting
+  - First-run detection: if no settings file exists on startup, this is a first launch. After creating defaults, signal the app to open the settings window automatically and show a notification: "Welcome to Pisum Langue! Please configure an AI provider to get started."
 - **Dependencies:** None (can be built in parallel with earlier phases)
-- **Acceptance criteria:** Config loads on startup. Defaults created if missing. Save/load roundtrips correctly.
+- **Acceptance criteria:** Config loads on startup. Defaults created if missing. Save/load roundtrips correctly. Invalid `active_preset_id` falls back to first built-in preset. First launch opens settings window automatically.
 
 #### Task 5.1b: Built-in Presets
 
@@ -910,20 +956,7 @@ impl ProviderPool {
 - **Dependencies:** Task 2.4
 - **Acceptance criteria:** Recording auto-stops after 10 minutes. Transcription proceeds normally after auto-stop.
 
-#### Task 6.4: File-Based Logging
-
-- **Files to create/modify:**
-  - `src-tauri/src/logging.rs` — Logging setup:
-    - Use `tracing` + `tracing-subscriber` + `tracing-appender` for structured file logging
-    - Log directory: `~/.pisum-langue/logs/`
-    - Rotating log files (daily rotation, keep 7 days)
-    - Log levels: ERROR for user-facing failures, WARN for retries/fallbacks, INFO for pipeline events, DEBUG for development
-  - `src-tauri/src/lib.rs` — Initialize logging in app setup before other modules
-  - `src-tauri/Cargo.toml` — Add `tracing = "0.1"`, `tracing-subscriber = "0.3"`, `tracing-appender = "0.2"`
-- **Dependencies:** Task 1.2
-- **Acceptance criteria:** App writes structured logs to `~/.pisum-langue/logs/`. Logs rotate daily. Old logs cleaned up after 7 days.
-
-#### Task 6.5: macOS Post-Install Permission Notification
+#### Task 6.4: macOS Post-Install Permission Notification
 
 - **Files to create/modify:**
   - `packages/macos/postinstall` — Shell script for macOS installer:
@@ -985,15 +1018,15 @@ No HTTP API is exposed. The application communicates with external APIs:
 | Dependency | Version | Purpose | Risk |
 |------------|---------|---------|------|
 | `tauri` | 2.x | App framework | Mature, actively maintained |
-| `global-hotkey` | 0.6 | System-wide hotkey registration | Proven in reference repo |
+| `global-hotkey` | 0.6+ | System-wide hotkey registration | Verify latest version before implementation; API may differ from 0.6 |
 | `cpal` | 0.15 | Audio I/O | Cross-platform, widely used |
-| `audiopus` | 0.2 | Opus encoding | Wraps libopus; requires C toolchain |
+| `audiopus` | 0.2+ | Opus encoding | Verify latest version before implementation; wraps libopus; requires C toolchain |
 | `rubato` | 0.16 | Audio resampling | Pure Rust, no system deps |
 | `ogg` | 0.9 | Ogg container | Stable |
 | `hound` | 3.5 | WAV encoding | Stable fallback |
 | `reqwest` | 0.12 | HTTP client | Uses rustls (no OpenSSL dep) |
 | `arboard` | 3 | Clipboard access | Cross-platform |
-| `enigo` | 0.3 | Input simulation | Requires accessibility on macOS |
+| `enigo` | 0.3+ | Input simulation | Verify latest version before implementation; requires accessibility on macOS |
 | `tracing` | 0.1 | Structured logging | Mature, widely used |
 | `tracing-subscriber` | 0.3 | Log output formatting | Companion to tracing |
 | `tracing-appender` | 0.2 | File-based log output with rotation | Companion to tracing |
@@ -1017,6 +1050,11 @@ No HTTP API is exposed. The application communicates with external APIs:
 - User has a working microphone connected
 - User has network access for API calls
 - User has a Google AI Studio API key with Gemini API access
+
+### Pre-Implementation Checklist
+
+- **Verify crate versions:** Before starting Phase 2, check `crates.io` for the latest versions of `global-hotkey`, `audiopus`, and `enigo`. These crates have had breaking API changes between minor versions. Pin exact versions in `Cargo.toml` after verification.
+- **Minimum Rust version:** Target Rust 1.80+ to use `std::sync::LazyLock` from the standard library instead of `once_cell::sync::Lazy`. If targeting Rust < 1.80, keep the `once_cell` dependency.
 
 ## 9. Testing Strategy
 
@@ -1044,6 +1082,11 @@ No HTTP API is exposed. The application communicates with external APIs:
 - Delete custom preset → verify it disappears from preset list
 - Edit built-in preset prompt → verify edit persists across restart
 - Close settings window → verify it hides to tray (does not quit app)
+- First launch (delete config file) → verify settings window opens automatically with welcome notification
+- Verify tray tooltip shows active preset name (e.g., "Pisum Langue — Transcribe DE")
+- Switch active preset → verify tray tooltip updates
+- Press hotkey while transcription is in progress → verify "transcription in progress" notification, no crash
+- Delete active custom preset → verify fallback to first built-in preset
 
 ### Edge Cases
 - No microphone connected → error notification on hotkey press
@@ -1060,12 +1103,12 @@ No HTTP API is exposed. The application communicates with external APIs:
 |---------|-------------------|---------|-------|
 | §4.1 #1 | Configurable global hotkey across all apps (Win/macOS) | 2.1, 5.4 | `global-hotkey` crate handles OS-level registration |
 | §4.1 #2 | Capture audio from default microphone when hotkey active | 2.2, 2.4 | `cpal` on dedicated thread |
-| §4.1 #3 | Encode to Opus/OGG (OGG_OPUS for Gemini API) | 2.3 | Sinc resampling + Opus + Ogg wrapper |
+| §4.1 #3 | Encode audio using selected format (Opus default, WAV fallback) | 2.3, 5.1 | User selects format in settings; runtime fallback if encoding fails |
 | §4.1 #4 | Stop recording on hotkey release (push-to-talk) | 2.1, 2.4 | Press/release events from `global-hotkey` |
 | §4.1 #5 | Max recording duration 10 minutes | 6.3 | Timer thread auto-stops recording |
-| §4.1 #6 | Audio/visual feedback for recording state | 1.3, 2.4 | Tray icon changes during recording |
+| §4.1 #6 | Audio/visual feedback for recording state | 1.3, 2.4 | Tray icon changes during recording; tray tooltip shows active preset |
 | §4.2 #1 | Send audio + active preset's system prompt to AI provider | 3.2, 3.4 | Gemini with system prompt from active preset |
-| §4.2 #2 | Multiple named prompt presets (roles) with system prompts, selectable from settings UI | 5.1, 5.1b, 5.4 | `Preset` struct, PresetConfig UI |
+| §4.2 #2 | Multiple named prompt presets with fallback on invalid active preset | 5.1, 5.1b, 5.4 | `Preset` struct, PresetConfig UI; falls back to first built-in preset |
 | §4.2 #3 | Built-in presets for common languages; users can create/edit/delete custom presets | 5.1b, 5.4 | `get_builtin_presets()`, built-in presets editable but not deletable |
 | §4.2 #4 | AI provider behind interface (swappable) | 3.1 | `TranscriptionProvider` trait |
 | §4.2 #5 | Round-robin distribution with fallback | 3.3 | `ProviderPool` with atomic index |
@@ -1075,6 +1118,7 @@ No HTTP API is exposed. The application communicates with external APIs:
 | §4.4 #2 | Persist settings between sessions | 5.1 | Single JSON file in user home directory |
 | §4.4 #3 | Start minimized to system tray | 1.3 | Window `visible: false` in tauri.conf.json |
 | §4.4 #4 | Auto-start with OS (configurable) | 6.2 | `tauri-plugin-autostart` |
+| §4.4 #5 | First-run opens settings, guides provider setup | 5.1, 1.3 | Config manager detects first launch; shows welcome notification |
 | §4.5 #1 | Detect network unavailable / API failure | 6.1 | reqwest error handling + retry logic |
 | §4.5 #2 | OS-native toast notification on error | 6.1 | `tauri-plugin-notification` |
 | §4.5 #3 | No silent error discarding | 6.1 | Every pipeline stage wrapped in error handler |
