@@ -69,10 +69,39 @@ async fn unregister_hotkey(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Check if a binding conflicts with the currently registered app hotkey.
+#[tauri::command]
+async fn check_conflict(binding: HotkeyBinding) -> Result<bool, String> {
+    if let Ok(settings) = SETTINGS.read() {
+        let current = HotkeyBinding {
+            modifiers: settings.hotkey.modifiers.clone(),
+            key: settings.hotkey.key.clone(),
+        };
+        Ok(hotkey::conflict::bindings_match(&binding, &current))
+    } else {
+        Ok(false)
+    }
+}
+
 /// Check if a binding conflicts with a known system hotkey.
 #[tauri::command]
 async fn check_system_conflict(binding: HotkeyBinding) -> Result<bool, String> {
     Ok(hotkey::conflict::conflicts_with_system(&binding))
+}
+
+// ── Auto-start command ───────────────────────────────────────────
+
+#[tauri::command]
+async fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())?;
+    } else {
+        manager.disable().map_err(|e| e.to_string())?;
+    }
+    tracing::info!("Auto-start {}", if enabled { "enabled" } else { "disabled" });
+    Ok(())
 }
 
 // ── Provider commands ────────────────────────────────────────────
@@ -126,7 +155,10 @@ async fn set_active_preset(preset_id: String) -> Result<(), String> {
     settings.active_preset_id = preset_id;
     config::manager::save_settings(&settings).map_err(|e| e.to_string())?;
 
-    // Update cached settings
+    // Update cached settings and tray tooltip
+    if let Some(preset) = settings.presets.iter().find(|p| p.id == settings.active_preset_id) {
+        tray::set_tray_tooltip(&preset.name);
+    }
     if let Ok(mut cached) = SETTINGS.write() {
         *cached = settings;
     }
@@ -147,6 +179,10 @@ async fn save_preset(preset: Preset) -> Result<(), String> {
 
     config::manager::save_settings(&settings).map_err(|e| e.to_string())?;
 
+    // Update tray tooltip if active preset name changed
+    if let Some(active) = settings.presets.iter().find(|p| p.id == settings.active_preset_id) {
+        tray::set_tray_tooltip(&active.name);
+    }
     if let Ok(mut cached) = SETTINGS.write() {
         *cached = settings;
     }
@@ -180,6 +216,10 @@ async fn delete_preset(preset_id: String) -> Result<(), String> {
 
     config::manager::save_settings(&settings).map_err(|e| e.to_string())?;
 
+    // Update tray tooltip (active preset may have changed due to fallback)
+    if let Some(active) = settings.presets.iter().find(|p| p.id == settings.active_preset_id) {
+        tray::set_tray_tooltip(&active.name);
+    }
     if let Ok(mut cached) = SETTINGS.write() {
         *cached = settings;
     }
@@ -255,6 +295,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             register_hotkey,
             unregister_hotkey,
+            check_conflict,
             check_system_conflict,
             test_provider_connection,
             load_settings,
@@ -263,6 +304,7 @@ pub fn run() {
             set_active_preset,
             save_preset,
             delete_preset,
+            set_autostart,
         ])
         .setup(|app| {
             tray::setup_tray(app)?;
@@ -323,8 +365,15 @@ pub fn run() {
                 );
             }
 
-            // First launch: show welcome notification and open settings window
+            // First launch: enable auto-start, show welcome notification, open settings
             if is_first_launch {
+                if settings.start_with_system {
+                    use tauri_plugin_autostart::ManagerExt;
+                    if let Err(e) = app.handle().autolaunch().enable() {
+                        tracing::warn!("Failed to enable auto-start on first launch: {}", e);
+                    }
+                }
+
                 tray::send_notification(
                     "Welcome to Pisum Langue!",
                     "Please configure an AI provider to get started.",

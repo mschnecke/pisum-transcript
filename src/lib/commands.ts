@@ -41,6 +41,15 @@ export async function unregisterHotkey(): Promise<void> {
   return invoke('unregister_hotkey');
 }
 
+export async function checkConflict(binding: HotkeyBinding): Promise<boolean> {
+  return invoke('check_conflict', { binding });
+}
+
 export async function checkSystemConflict(binding: HotkeyBinding): Promise<boolean> {
   return invoke('check_system_conflict', { binding });
+}
+
+// Auto-start
+export async function setAutostart(enabled: boolean): Promise<void> {
+  return invoke('set_autostart', { enabled });
 }

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
-    #[serde(default = "default_false")]
+    #[serde(default = "default_true")]
     pub start_with_system: bool,
 
     #[serde(default = "default_true")]
@@ -72,7 +72,7 @@ pub enum ProviderType {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            start_with_system: false,
+            start_with_system: true,
             show_tray_notifications: true,
             hotkey: default_hotkey(),
             audio_format: AudioFormat::Opus,
@@ -81,10 +81,6 @@ impl Default for AppSettings {
             providers: Vec::new(),
         }
     }
-}
-
-fn default_false() -> bool {
-    false
 }
 
 fn default_true() -> bool {

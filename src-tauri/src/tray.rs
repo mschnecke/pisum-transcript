@@ -28,7 +28,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let tray_icon = load_tray_icon(app);
 
-    let _tray = TrayIconBuilder::new()
+    let _tray = TrayIconBuilder::with_id("main")
         .icon(tray_icon)
         .tooltip("Pisum Langue")
         .menu(&menu)
@@ -62,7 +62,31 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Send an OS-native notification.
+/// Respects the `showTrayNotifications` setting unless `force` is true.
+/// Error notifications should use `force = true` to always show.
 pub fn send_notification(title: &str, message: &str) {
+    send_notification_impl(title, message, true)
+}
+
+/// Send an informational notification that respects the user's notification preference.
+pub fn send_info_notification(title: &str, message: &str) {
+    send_notification_impl(title, message, false)
+}
+
+fn send_notification_impl(title: &str, message: &str, force: bool) {
+    if !force {
+        if let Ok(settings) = crate::SETTINGS.read() {
+            if !settings.show_tray_notifications {
+                tracing::debug!(
+                    "Notification suppressed (disabled in settings): {} - {}",
+                    title,
+                    message
+                );
+                return;
+            }
+        }
+    }
+
     let handle = APP_HANDLE.read().unwrap();
     if let Some(app) = handle.as_ref() {
         use tauri_plugin_notification::NotificationExt;
@@ -93,46 +117,48 @@ pub fn set_tray_tooltip(preset_name: &str) {
 }
 
 /// Update the tray icon to reflect recording state.
-/// This will be wired up in Phase 2 when audio recording is implemented.
-pub fn set_recording_state(_recording: bool) {
-    // TODO: Phase 2 - swap tray icon between idle and recording states
-    tracing::debug!("Recording state changed: {}", _recording);
+pub fn set_recording_state(recording: bool) {
+    let handle = APP_HANDLE.read().unwrap();
+    if let Some(app) = handle.as_ref() {
+        if let Some(tray) = app.tray_by_id("main") {
+            let icon_name = if recording {
+                "tray-icon-recording.png"
+            } else {
+                &get_theme_icon_name()
+            };
+
+            // Try resource dir first, then dev paths
+            let icon = try_load_icon_by_name(app, icon_name)
+                .unwrap_or_else(|| {
+                    if recording {
+                        Image::from_bytes(include_bytes!("../icons/tray-icon-recording.png"))
+                            .expect("Failed to load embedded recording icon")
+                    } else {
+                        Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+                            .expect("Failed to load embedded tray icon")
+                    }
+                });
+
+            let _ = tray.set_icon(Some(icon));
+        }
+    }
+    tracing::debug!("Recording state changed: {}", recording);
 }
 
-/// Load the tray icon image.
-fn load_tray_icon(app: &tauri::App) -> Image<'static> {
-    // Try to load from bundled resources first, then fall back to dev path
-    let icon_paths = get_icon_search_paths(app);
-
-    for path in &icon_paths {
-        if path.exists() {
-            match Image::from_path(path) {
-                Ok(img) => {
-                    tracing::debug!("Loaded tray icon from: {}", path.display());
-                    return img;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load tray icon from {}: {}", path.display(), e);
+/// Try to load a tray icon by filename from known paths.
+fn try_load_icon_by_name(app: &AppHandle, icon_name: &str) -> Option<Image<'static>> {
+    // Resource directory (production)
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        for path in [
+            resource_dir.join(icon_name),
+            resource_dir.join("icons").join(icon_name),
+        ] {
+            if path.exists() {
+                if let Ok(img) = Image::from_path(&path) {
+                    return Some(img);
                 }
             }
         }
-    }
-
-    tracing::warn!("No tray icon found, using empty icon");
-    Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
-        .expect("Failed to load embedded tray icon")
-}
-
-/// Get a list of possible tray icon paths to search.
-fn get_icon_search_paths(app: &tauri::App) -> Vec<std::path::PathBuf> {
-    let mut paths = Vec::new();
-
-    let icon_name = get_theme_icon_name();
-
-    // Resource directory (production)
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        paths.push(resource_dir.join(&icon_name));
-        paths.push(resource_dir.join("icons").join(&icon_name));
     }
 
     // Dev mode: walk up from executable to find src-tauri/icons
@@ -140,14 +166,32 @@ fn get_icon_search_paths(app: &tauri::App) -> Vec<std::path::PathBuf> {
         let mut dir = exe_path.parent().map(|p| p.to_path_buf());
         for _ in 0..5 {
             if let Some(ref d) = dir {
-                let candidate = d.join("src-tauri").join("icons").join(&icon_name);
-                paths.push(candidate);
+                let candidate = d.join("src-tauri").join("icons").join(icon_name);
+                if candidate.exists() {
+                    if let Ok(img) = Image::from_path(&candidate) {
+                        return Some(img);
+                    }
+                }
                 dir = d.parent().map(|p| p.to_path_buf());
             }
         }
     }
 
-    paths
+    None
+}
+
+/// Load the tray icon image.
+fn load_tray_icon(app: &tauri::App) -> Image<'static> {
+    let icon_name = get_theme_icon_name();
+
+    // Try to load from known paths
+    if let Some(img) = try_load_icon_by_name(app.handle(), &icon_name) {
+        return img;
+    }
+
+    tracing::warn!("No tray icon found, using embedded icon");
+    Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+        .expect("Failed to load embedded tray icon")
 }
 
 /// Get the appropriate icon filename based on system theme.

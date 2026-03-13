@@ -1,11 +1,18 @@
 <script lang="ts">
   import type { AppSettings } from '$lib/types';
+  import { setAutostart } from '$lib/commands';
 
   let { settings, onUpdate }: { settings: AppSettings; onUpdate: (s: AppSettings) => void } =
     $props();
 
-  function toggleStartWithSystem() {
-    onUpdate({ ...settings, startWithSystem: !settings.startWithSystem });
+  async function toggleStartWithSystem() {
+    const newValue = !settings.startWithSystem;
+    try {
+      await setAutostart(newValue);
+      onUpdate({ ...settings, startWithSystem: newValue });
+    } catch (e) {
+      console.error('Failed to set autostart:', e);
+    }
   }
 
   function toggleNotifications() {

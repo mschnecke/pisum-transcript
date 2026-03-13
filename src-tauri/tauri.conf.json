@@ -31,6 +31,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": {
+      "signingIdentity": null,
+      "providerShortName": null,
+      "minimumSystemVersion": "10.15"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -42,7 +47,8 @@
       "icons/tray-icon.png",
       "icons/tray-icon-recording.png",
       "icons/tray-icon-light.png",
-      "icons/tray-icon-dark.png"
+      "icons/tray-icon-dark.png",
+      "scripts/macos-postinstall.sh"
     ]
   },
   "plugins": {}

@@ -18,7 +18,7 @@ enum RecorderCommand {
 pub struct AudioRecorderHandle {
     command_tx: Sender<RecorderCommand>,
     samples: Arc<Mutex<Vec<f32>>>,
-    is_recording: Arc<AtomicBool>,
+    _is_recording: Arc<AtomicBool>,
     sample_rate: u32,
     channels: u16,
     thread_handle: Option<JoinHandle<()>>,
@@ -149,7 +149,7 @@ impl AudioRecorderHandle {
         Ok(Self {
             command_tx,
             samples,
-            is_recording,
+            _is_recording: is_recording,
             sample_rate,
             channels,
             thread_handle: Some(thread_handle),
@@ -171,10 +171,5 @@ impl AudioRecorderHandle {
             .clone();
 
         Ok((samples, self.sample_rate, self.channels))
-    }
-
-    /// Check if currently recording.
-    pub fn is_recording(&self) -> bool {
-        self.is_recording.load(Ordering::SeqCst)
     }
 }

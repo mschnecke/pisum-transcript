@@ -165,7 +165,7 @@ fn handle_hotkey_press() {
     // Guard: transcription in progress
     if IS_TRANSCRIBING.load(Ordering::SeqCst) {
         tracing::info!("Transcription in progress, ignoring press");
-        tray::send_notification(
+        tray::send_info_notification(
             "Transcription In Progress",
             "Please wait for the current transcription to finish.",
         );
@@ -196,6 +196,10 @@ fn handle_hotkey_press() {
                 };
                 if has_recorder {
                     tracing::warn!("Max recording duration reached, auto-stopping");
+                    tray::send_info_notification(
+                        "Recording Auto-Stopped",
+                        "Maximum recording duration (10 min) reached. Transcribing...",
+                    );
                     handle_hotkey_release();
                 }
             });
@@ -255,38 +259,52 @@ fn handle_hotkey_release() {
     std::thread::spawn(move || {
         IS_TRANSCRIBING.store(true, Ordering::SeqCst);
 
-        let result = process_and_transcribe(recorder);
+        let pipeline_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let result = process_and_transcribe(recorder);
+
+            match result {
+                Ok(text) => {
+                    tracing::info!("Transcription complete: {} chars", text.len());
+                    tracing::debug!("Transcription text: {}", &text[..text.len().min(200)]);
+
+                    if let Err(e) = crate::output::clipboard::set_clipboard_text(&text) {
+                        tracing::error!("Clipboard error: {}", e);
+                        tray::send_notification(
+                            "Output Error",
+                            &format!("Failed to copy to clipboard: {}", e),
+                        );
+                        return;
+                    }
+
+                    // Small delay to ensure clipboard is ready before paste
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+
+                    if let Err(e) = crate::output::paste::simulate_paste() {
+                        tracing::error!("Paste error: {}", e);
+                        tray::send_notification(
+                            "Paste Failed",
+                            "Text was copied to clipboard but paste simulation failed. Use Ctrl+V to paste manually.",
+                        );
+                    }
+                }
+                Err(e) => {
+                    let (title, body) = categorize_error(&e);
+                    tracing::error!("Pipeline error: {}", e);
+                    tray::send_notification(title, &body);
+                }
+            }
+        }));
+
+        if pipeline_result.is_err() {
+            tracing::error!("Unexpected panic in transcription pipeline");
+            tray::send_notification(
+                "Unexpected Error",
+                "An unexpected error occurred. Check the logs for details.",
+            );
+        }
 
         IS_TRANSCRIBING.store(false, Ordering::SeqCst);
         tray::set_recording_state(false);
-
-        match result {
-            Ok(text) => {
-                tracing::info!("Transcription complete: {} chars", text.len());
-                tracing::debug!("Transcription text: {}", &text[..text.len().min(200)]);
-
-                if let Err(e) = crate::output::clipboard::set_clipboard_text(&text) {
-                    tracing::error!("Clipboard error: {}", e);
-                    tray::send_notification("Output Error", &format!("Failed to copy to clipboard: {}", e));
-                    return;
-                }
-
-                // Small delay to ensure clipboard is ready before paste
-                std::thread::sleep(std::time::Duration::from_millis(50));
-
-                if let Err(e) = crate::output::paste::simulate_paste() {
-                    tracing::error!("Paste error: {}", e);
-                    tray::send_notification(
-                        "Paste Failed",
-                        "Text was copied to clipboard but paste simulation failed. Use Ctrl+V to paste manually.",
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::error!("Pipeline error: {}", e);
-                tray::send_notification("Transcription Error", &e.to_string());
-            }
-        }
     });
 }
 
@@ -307,20 +325,46 @@ fn process_and_transcribe(
         channels
     );
 
-    // Encode: try Opus first, fall back to WAV
-    let (audio_data, mime_type) =
-        match audio::encoder::encode_to_opus(&samples, sample_rate, channels) {
-            Ok(data) => {
-                tracing::info!("Encoded to Opus: {} bytes", data.len());
-                (data, audio::encoder::opus_mime_type())
+    // Encode using the format selected in settings, with fallback
+    let preferred_format = {
+        crate::SETTINGS
+            .read()
+            .map(|s| s.audio_format.clone())
+            .unwrap_or(crate::config::schema::AudioFormat::Opus)
+    };
+
+    let (audio_data, mime_type) = match preferred_format {
+        crate::config::schema::AudioFormat::Opus => {
+            match audio::encoder::encode_to_opus(&samples, sample_rate, channels) {
+                Ok(data) => {
+                    tracing::info!("Encoded to Opus: {} bytes", data.len());
+                    (data, audio::encoder::opus_mime_type())
+                }
+                Err(e) => {
+                    tracing::warn!("Opus encoding failed, falling back to WAV: {}", e);
+                    let wav_data =
+                        audio::encoder::encode_to_wav(&samples, sample_rate, channels)?;
+                    tracing::info!("Encoded to WAV (fallback): {} bytes", wav_data.len());
+                    (wav_data, audio::encoder::wav_mime_type())
+                }
             }
-            Err(e) => {
-                tracing::warn!("Opus encoding failed, falling back to WAV: {}", e);
-                let wav_data = audio::encoder::encode_to_wav(&samples, sample_rate, channels)?;
-                tracing::info!("Encoded to WAV: {} bytes", wav_data.len());
-                (wav_data, audio::encoder::wav_mime_type())
+        }
+        crate::config::schema::AudioFormat::Wav => {
+            match audio::encoder::encode_to_wav(&samples, sample_rate, channels) {
+                Ok(data) => {
+                    tracing::info!("Encoded to WAV: {} bytes", data.len());
+                    (data, audio::encoder::wav_mime_type())
+                }
+                Err(e) => {
+                    tracing::warn!("WAV encoding failed, falling back to Opus: {}", e);
+                    let opus_data =
+                        audio::encoder::encode_to_opus(&samples, sample_rate, channels)?;
+                    tracing::info!("Encoded to Opus (fallback): {} bytes", opus_data.len());
+                    (opus_data, audio::encoder::opus_mime_type())
+                }
             }
-        };
+        }
+    };
 
     // Transcribe via provider pool using the active preset's system prompt
     let system_prompt = crate::active_system_prompt();
@@ -328,12 +372,6 @@ fn process_and_transcribe(
     let pool = crate::PROVIDER_POOL
         .read()
         .map_err(|_| AppError::Transcription("Failed to lock provider pool".to_string()))?;
-
-    if pool.is_empty() {
-        return Err(AppError::Transcription(
-            "No AI providers configured. Please add a provider in Settings.".to_string(),
-        ));
-    }
 
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| AppError::Transcription(format!("Failed to create runtime: {}", e)))?;
@@ -363,4 +401,32 @@ pub fn format_hotkey(binding: &HotkeyBinding) -> String {
     let mut parts: Vec<&str> = binding.modifiers.iter().map(|s| s.as_str()).collect();
     parts.push(&binding.key);
     parts.join(" + ")
+}
+
+/// Categorize an AppError into a user-friendly notification title and body
+fn categorize_error(error: &AppError) -> (&'static str, String) {
+    let body = error.to_string();
+    let title = match error {
+        AppError::Audio(_) => "Recording Error",
+        AppError::Transcription(msg) => {
+            let lower = msg.to_lowercase();
+            if lower.contains("no ai providers") || lower.contains("provider") {
+                "Configuration Error"
+            } else if lower.contains("network")
+                || lower.contains("request failed")
+                || lower.contains("timed out")
+            {
+                "Network Error"
+            } else if lower.contains("api error 401") || lower.contains("api error 403") {
+                "Authentication Error"
+            } else if lower.contains("api error 429") || lower.contains("quota") {
+                "Rate Limit Error"
+            } else {
+                "Transcription Error"
+            }
+        }
+        AppError::Output(_) => "Output Error",
+        _ => "Error",
+    };
+    (title, body)
 }
