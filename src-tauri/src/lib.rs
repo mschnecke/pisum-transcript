@@ -1,12 +1,43 @@
+mod ai;
 mod audio;
+mod config;
 mod error;
 mod hotkey;
 mod logging;
+mod output;
 mod tray;
 
+use std::sync::RwLock;
+
+use ai::pool::{ProviderEntry, ProviderPool};
+use config::schema::{AppSettings, Preset, ProviderConfig};
 use hotkey::conflict::HotkeyBinding;
-use tauri::AppHandle;
+use once_cell::sync::Lazy;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::MacosLauncher;
+
+/// Global provider pool, accessible from the hotkey manager
+pub static PROVIDER_POOL: Lazy<RwLock<ProviderPool>> =
+    Lazy::new(|| RwLock::new(ProviderPool::new()));
+
+/// Global settings cache, used to read the active preset's system prompt
+pub static SETTINGS: Lazy<RwLock<AppSettings>> =
+    Lazy::new(|| RwLock::new(AppSettings::default()));
+
+/// Get the active system prompt from the cached settings
+pub fn active_system_prompt() -> String {
+    let settings = SETTINGS.read().unwrap();
+    settings
+        .presets
+        .iter()
+        .find(|p| p.id == settings.active_preset_id)
+        .map(|p| p.system_prompt.clone())
+        .unwrap_or_else(|| {
+            "Transcribe the following audio accurately. Output only the transcription without any additional commentary.".to_string()
+        })
+}
+
+// ── Hotkey commands ──────────────────────────────────────────────
 
 /// Register a new hotkey binding. Must run on the main thread.
 #[tauri::command]
@@ -44,9 +75,174 @@ async fn check_system_conflict(binding: HotkeyBinding) -> Result<bool, String> {
     Ok(hotkey::conflict::conflicts_with_system(&binding))
 }
 
+// ── Provider commands ────────────────────────────────────────────
+
+/// Test an AI provider connection.
+#[tauri::command]
+async fn test_provider_connection(provider: ProviderConfig) -> Result<bool, String> {
+    let provider_type_str = match provider.provider_type {
+        config::schema::ProviderType::Gemini => "gemini".to_string(),
+    };
+    let entry = ProviderEntry {
+        api_key: provider.api_key,
+        model: provider.model,
+        provider_type: provider_type_str,
+    };
+    ProviderPool::test_provider(&entry)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ── Settings commands ────────────────────────────────────────────
+
+#[tauri::command]
+async fn load_settings() -> Result<AppSettings, String> {
+    config::manager::load_settings().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_settings(settings: AppSettings, app: AppHandle) -> Result<(), String> {
+    config::manager::save_settings(&settings).map_err(|e| e.to_string())?;
+    apply_settings(&settings, &app).await;
+    Ok(())
+}
+
+// ── Preset commands ──────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_presets() -> Result<Vec<Preset>, String> {
+    let settings = config::manager::load_settings().map_err(|e| e.to_string())?;
+    Ok(settings.presets)
+}
+
+#[tauri::command]
+async fn set_active_preset(preset_id: String) -> Result<(), String> {
+    let mut settings = config::manager::load_settings().map_err(|e| e.to_string())?;
+
+    if !settings.presets.iter().any(|p| p.id == preset_id) {
+        return Err(format!("Preset '{}' not found", preset_id));
+    }
+
+    settings.active_preset_id = preset_id;
+    config::manager::save_settings(&settings).map_err(|e| e.to_string())?;
+
+    // Update cached settings
+    if let Ok(mut cached) = SETTINGS.write() {
+        *cached = settings;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn save_preset(preset: Preset) -> Result<(), String> {
+    let mut settings = config::manager::load_settings().map_err(|e| e.to_string())?;
+
+    if let Some(existing) = settings.presets.iter_mut().find(|p| p.id == preset.id) {
+        existing.name = preset.name;
+        existing.system_prompt = preset.system_prompt;
+    } else {
+        settings.presets.push(preset);
+    }
+
+    config::manager::save_settings(&settings).map_err(|e| e.to_string())?;
+
+    if let Ok(mut cached) = SETTINGS.write() {
+        *cached = settings;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_preset(preset_id: String) -> Result<(), String> {
+    let mut settings = config::manager::load_settings().map_err(|e| e.to_string())?;
+
+    // Check if it's a built-in preset
+    if let Some(preset) = settings.presets.iter().find(|p| p.id == preset_id) {
+        if preset.is_builtin {
+            return Err("Cannot delete a built-in preset".to_string());
+        }
+    } else {
+        return Err(format!("Preset '{}' not found", preset_id));
+    }
+
+    settings.presets.retain(|p| p.id != preset_id);
+
+    // If the deleted preset was active, fall back
+    if settings.active_preset_id == preset_id {
+        settings.active_preset_id = settings
+            .presets
+            .first()
+            .map(|p| p.id.clone())
+            .unwrap_or_else(|| "de-transcribe".to_string());
+    }
+
+    config::manager::save_settings(&settings).map_err(|e| e.to_string())?;
+
+    if let Ok(mut cached) = SETTINGS.write() {
+        *cached = settings;
+    }
+
+    Ok(())
+}
+
+// ── Settings application ─────────────────────────────────────────
+
+/// Apply settings: rebuild provider pool, re-register hotkey
+async fn apply_settings(settings: &AppSettings, app: &AppHandle) {
+    // Update cached settings
+    if let Ok(mut cached) = SETTINGS.write() {
+        *cached = settings.clone();
+    }
+
+    // Rebuild provider pool from enabled providers
+    let entries: Vec<ProviderEntry> = settings
+        .providers
+        .iter()
+        .filter(|p| p.enabled)
+        .map(|p| {
+            let provider_type_str = match p.provider_type {
+                config::schema::ProviderType::Gemini => "gemini".to_string(),
+            };
+            ProviderEntry {
+                api_key: p.api_key.clone(),
+                model: p.model.clone(),
+                provider_type: provider_type_str,
+            }
+        })
+        .collect();
+
+    if let Ok(mut pool) = PROVIDER_POOL.write() {
+        pool.rebuild(&entries);
+    }
+
+    // Re-register hotkey on main thread
+    let binding = HotkeyBinding {
+        modifiers: settings.hotkey.modifiers.clone(),
+        key: settings.hotkey.key.clone(),
+    };
+    let app_clone = app.clone();
+    let _ = app_clone.run_on_main_thread(move || {
+        match hotkey::manager::register(&binding) {
+            Ok(()) => tracing::info!(
+                "Hotkey re-registered: {}",
+                hotkey::manager::format_hotkey(&binding)
+            ),
+            Err(e) => tracing::warn!("Failed to re-register hotkey: {}", e),
+        }
+    });
+
+    // Update tray tooltip with active preset name
+    if let Some(preset) = settings.presets.iter().find(|p| p.id == settings.active_preset_id) {
+        tray::set_tray_tooltip(&preset.name);
+    }
+}
+
+// ── App entry point ──────────────────────────────────────────────
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize logging first so all subsequent setup is logged
     logging::init();
     tracing::info!("Starting Pisum Langue v{}", env!("CARGO_PKG_VERSION"));
 
@@ -60,6 +256,13 @@ pub fn run() {
             register_hotkey,
             unregister_hotkey,
             check_system_conflict,
+            test_provider_connection,
+            load_settings,
+            save_settings,
+            get_presets,
+            set_active_preset,
+            save_preset,
+            delete_preset,
         ])
         .setup(|app| {
             tray::setup_tray(app)?;
@@ -67,21 +270,75 @@ pub fn run() {
             // Initialize hotkey manager on main thread
             hotkey::manager::init(app.handle())?;
 
-            // Register default hotkey: Ctrl+Shift+Space (Windows) / Cmd+Shift+Space (macOS)
-            let default_binding = HotkeyBinding {
-                #[cfg(target_os = "macos")]
-                modifiers: vec!["Cmd".to_string(), "Shift".to_string()],
-                #[cfg(not(target_os = "macos"))]
-                modifiers: vec!["Ctrl".to_string(), "Shift".to_string()],
-                key: "Space".to_string(),
-            };
+            // Initialize config (creates defaults on first launch)
+            let is_first_launch = config::manager::init()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
-            match hotkey::manager::register(&default_binding) {
+            // Load settings and apply
+            let settings = config::manager::load_settings()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+
+            // Register hotkey from config
+            let binding = HotkeyBinding {
+                modifiers: settings.hotkey.modifiers.clone(),
+                key: settings.hotkey.key.clone(),
+            };
+            match hotkey::manager::register(&binding) {
                 Ok(()) => tracing::info!(
-                    "Default hotkey registered: {}",
-                    hotkey::manager::format_hotkey(&default_binding)
+                    "Hotkey registered: {}",
+                    hotkey::manager::format_hotkey(&binding)
                 ),
-                Err(e) => tracing::warn!("Failed to register default hotkey: {}", e),
+                Err(e) => tracing::warn!("Failed to register hotkey: {}", e),
+            }
+
+            // Rebuild provider pool from config
+            let entries: Vec<ProviderEntry> = settings
+                .providers
+                .iter()
+                .filter(|p| p.enabled)
+                .map(|p| {
+                    let provider_type_str = match p.provider_type {
+                        config::schema::ProviderType::Gemini => "gemini".to_string(),
+                    };
+                    ProviderEntry {
+                        api_key: p.api_key.clone(),
+                        model: p.model.clone(),
+                        provider_type: provider_type_str,
+                    }
+                })
+                .collect();
+
+            if let Ok(mut pool) = PROVIDER_POOL.write() {
+                pool.rebuild(&entries);
+            }
+
+            // Cache settings
+            if let Ok(mut cached) = SETTINGS.write() {
+                *cached = settings.clone();
+            }
+
+            if settings.providers.is_empty() {
+                tracing::info!(
+                    "No AI providers configured. Configure a provider in Settings."
+                );
+            }
+
+            // First launch: show welcome notification and open settings window
+            if is_first_launch {
+                tray::send_notification(
+                    "Welcome to Pisum Langue!",
+                    "Please configure an AI provider to get started.",
+                );
+                // Open settings window
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+
+            // Set tray tooltip with active preset
+            if let Some(preset) = settings.presets.iter().find(|p| p.id == settings.active_preset_id) {
+                tray::set_tray_tooltip(&preset.name);
             }
 
             tracing::info!("App setup complete");

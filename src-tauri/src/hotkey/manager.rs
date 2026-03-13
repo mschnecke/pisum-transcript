@@ -251,37 +251,49 @@ fn handle_hotkey_release() {
         recording_duration
     );
 
-    // Stop and encode in a background thread to avoid blocking the event loop
+    // Stop, encode, transcribe in a background thread to avoid blocking the event loop
     std::thread::spawn(move || {
         IS_TRANSCRIBING.store(true, Ordering::SeqCst);
 
-        let result = process_recording(recorder);
+        let result = process_and_transcribe(recorder);
 
         IS_TRANSCRIBING.store(false, Ordering::SeqCst);
         tray::set_recording_state(false);
 
         match result {
-            Ok((audio_data, mime_type)) => {
-                tracing::info!(
-                    "Audio encoded: {} bytes, mime: {}",
-                    audio_data.len(),
-                    mime_type
-                );
-                // Phase 3 will send to AI provider here
-                // Phase 4 will copy to clipboard and paste here
+            Ok(text) => {
+                tracing::info!("Transcription complete: {} chars", text.len());
+                tracing::debug!("Transcription text: {}", &text[..text.len().min(200)]);
+
+                if let Err(e) = crate::output::clipboard::set_clipboard_text(&text) {
+                    tracing::error!("Clipboard error: {}", e);
+                    tray::send_notification("Output Error", &format!("Failed to copy to clipboard: {}", e));
+                    return;
+                }
+
+                // Small delay to ensure clipboard is ready before paste
+                std::thread::sleep(std::time::Duration::from_millis(50));
+
+                if let Err(e) = crate::output::paste::simulate_paste() {
+                    tracing::error!("Paste error: {}", e);
+                    tray::send_notification(
+                        "Paste Failed",
+                        "Text was copied to clipboard but paste simulation failed. Use Ctrl+V to paste manually.",
+                    );
+                }
             }
             Err(e) => {
-                tracing::error!("Recording pipeline error: {}", e);
-                tray::send_notification("Recording Error", &e.to_string());
+                tracing::error!("Pipeline error: {}", e);
+                tray::send_notification("Transcription Error", &e.to_string());
             }
         }
     });
 }
 
-/// Stop recording, encode audio, return (data, mime_type)
-fn process_recording(
+/// Stop recording, encode audio, send to AI, return transcription text
+fn process_and_transcribe(
     recorder: audio::recorder::AudioRecorderHandle,
-) -> Result<(Vec<u8>, &'static str), AppError> {
+) -> Result<String, AppError> {
     let (samples, sample_rate, channels) = recorder.stop()?;
 
     if samples.is_empty() {
@@ -295,19 +307,41 @@ fn process_recording(
         channels
     );
 
-    // Try Opus first, fall back to WAV
-    match audio::encoder::encode_to_opus(&samples, sample_rate, channels) {
-        Ok(data) => {
-            tracing::info!("Encoded to Opus: {} bytes", data.len());
-            Ok((data, audio::encoder::opus_mime_type()))
-        }
-        Err(e) => {
-            tracing::warn!("Opus encoding failed, falling back to WAV: {}", e);
-            let wav_data = audio::encoder::encode_to_wav(&samples, sample_rate, channels)?;
-            tracing::info!("Encoded to WAV: {} bytes", wav_data.len());
-            Ok((wav_data, audio::encoder::wav_mime_type()))
-        }
+    // Encode: try Opus first, fall back to WAV
+    let (audio_data, mime_type) =
+        match audio::encoder::encode_to_opus(&samples, sample_rate, channels) {
+            Ok(data) => {
+                tracing::info!("Encoded to Opus: {} bytes", data.len());
+                (data, audio::encoder::opus_mime_type())
+            }
+            Err(e) => {
+                tracing::warn!("Opus encoding failed, falling back to WAV: {}", e);
+                let wav_data = audio::encoder::encode_to_wav(&samples, sample_rate, channels)?;
+                tracing::info!("Encoded to WAV: {} bytes", wav_data.len());
+                (wav_data, audio::encoder::wav_mime_type())
+            }
+        };
+
+    // Transcribe via provider pool using the active preset's system prompt
+    let system_prompt = crate::active_system_prompt();
+
+    let pool = crate::PROVIDER_POOL
+        .read()
+        .map_err(|_| AppError::Transcription("Failed to lock provider pool".to_string()))?;
+
+    if pool.is_empty() {
+        return Err(AppError::Transcription(
+            "No AI providers configured. Please add a provider in Settings.".to_string(),
+        ));
     }
+
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| AppError::Transcription(format!("Failed to create runtime: {}", e)))?;
+
+    tracing::info!("Sending audio to AI provider...");
+    let result = rt.block_on(pool.transcribe(&audio_data, mime_type, &system_prompt))?;
+
+    Ok(result.text)
 }
 
 /// Parse a HotkeyBinding into a global_hotkey HotKey

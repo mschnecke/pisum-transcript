@@ -30,6 +30,11 @@ audiopus = "0.2"
 rubato = "0.16"
 ogg = "0.9"
 hound = "3.5"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+base64 = "0.22"
+arboard = "3"
+enigo = "0.3"
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Registry"] }
