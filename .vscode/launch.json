@@ -1,0 +1,18 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+{
+      "name": "Tauri: Dev (full)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "windows": {
+        "runtimeExecutable": "C:\\Program Files\\nodejs\\npm.cmd"
+      },
+      "runtimeArgs": ["run", "tauri:dev"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}

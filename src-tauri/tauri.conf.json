@@ -1,0 +1,60 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui/tauri-v2-schema/main/tauri.conf.json",
+  "productName": "PisumLangue",
+  "version": "0.1.0",
+  "identifier": "com.pisumlangue.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "title": "Pisum Langue - Settings",
+        "width": 700,
+        "height": 500,
+        "minWidth": 500,
+        "minHeight": 400,
+        "resizable": true,
+        "maximizable": false,
+        "visible": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "macOS": {
+      "signingIdentity": null,
+      "providerShortName": null,
+      "minimumSystemVersion": "10.15"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "icons/tray-icon.png",
+      "icons/tray-icon-recording.png",
+      "icons/tray-icon-light.png",
+      "icons/tray-icon-dark.png",
+      "icons/tray-iconTemplate.png",
+      "icons/tray-iconTemplate@2x.png",
+      "icons/tray-iconTemplate-recording.png",
+      "icons/tray-iconTemplate-recording@2x.png",
+      "scripts/macos-postinstall.sh"
+    ]
+  },
+  "plugins": {}
+}

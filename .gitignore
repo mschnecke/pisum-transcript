@@ -416,3 +416,14 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Tauri / Rust
+target/
+src-tauri/gen/
+
+# Node.js / Vite
+dist/
+node_modules/
+
+# Package manager lock files are already tracked, but ignore others
+# package-lock.json is committed
