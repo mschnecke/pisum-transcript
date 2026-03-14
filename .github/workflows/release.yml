@@ -123,7 +123,7 @@ jobs:
           body: |
             ## Pisum Langue v${{ steps.get_version.outputs.version }}
 
-            A cross-platform Hotkey-driven, system-tray-style dictation tool.
+            A cross-platform, Hotkey-driven, system-tray-style dictation tool.
 
             ### Installation
 
@@ -138,8 +138,8 @@ jobs:
 
             **Windows (Chocolatey):**
             ```powershell
-            choco source add -n="global-hotkey" -s="https://www.myget.org/F/mschnecke/api/v3/index.json"
-            choco install langue
+            choco source add -n="pisum-langue" -s="https://www.myget.org/F/mschnecke/api/v3/index.json"
+            choco install pisum-langue
             ```
 
             **Windows (Direct Download):**
@@ -277,7 +277,7 @@ jobs:
         uses: peter-evans/repository-dispatch@v2
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          repository: mschnecke/homebrew-global-hotkey
+          repository: mschnecke/homebrew-lange
           event-type: update-cask
           client-payload: '{"version": "${{ needs.create-release.outputs.version }}"}'
 
@@ -310,9 +310,9 @@ jobs:
           Set-Content -Path packages/chocolatey/tools/chocolateyInstall.ps1 -Value $installScript
 
           # Update nuspec version
-          $nuspec = Get-Content packages/chocolatey/global-hotkey.nuspec -Raw
+          $nuspec = Get-Content packages/chocolatey/pisum-langue.nuspec -Raw
           $nuspec = $nuspec -replace '<version>.*</version>', "<version>$version</version>"
-          Set-Content -Path packages/chocolatey/global-hotkey.nuspec -Value $nuspec
+          Set-Content -Path packages/chocolatey/pisum-langue.nuspec -Value $nuspec
 
       - name: Pack Chocolatey package
         run: |
@@ -329,6 +329,6 @@ jobs:
           MYGET_API_KEY: ${{ secrets.MYGET_API_KEY }}
         run: |
           $version = "${{ needs.create-release.outputs.version }}"
-          dotnet nuget push "packages/chocolatey/global-hotkey.$version.nupkg" `
+          dotnet nuget push "packages/chocolatey/pisum-langue.$version.nupkg" `
             --source "https://www.myget.org/F/mschnecke/api/v3/index.json" `
             --api-key $env:MYGET_API_KEY
