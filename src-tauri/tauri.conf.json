@@ -36,9 +36,7 @@
       "signingIdentity": null,
       "providerShortName": null,
       "minimumSystemVersion": "10.15",
-      "infoPlist": {
-        "LSUIElement": "true"
-      }
+      "infoPlist": "<key>LSUIElement</key><true/>"
     },
     "icon": [
       "icons/32x32.png",
