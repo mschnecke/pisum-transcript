@@ -33,7 +33,7 @@ npm run check          # Run svelte-check type checking
 
 - **Rust backend** (`src-tauri/`):
   - `audio/` — Recording (CPAL) and encoding (Opus/WAV with fallback)
-  - `ai/` — Provider abstraction, Gemini client, round-robin provider pool
+  - `ai/` — Provider abstraction, Gemini client (transcription + model listing API), round-robin provider pool
   - `hotkey/` — Global hotkey registration, conflict detection, key parsing
   - `output/` — Clipboard management and paste simulation
   - `config/` — Settings persistence (JSON), schema, built-in presets
