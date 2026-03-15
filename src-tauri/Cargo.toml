@@ -1,6 +1,6 @@
 [package]
 name = "pisum-transcript"
-version = "0.1.19"
+version = "1.0.0"
 edition = "2021"
 
 [lib]
