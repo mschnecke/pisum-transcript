@@ -1,15 +1,21 @@
 <script lang="ts">
   import type { AppSettings } from '$lib/types';
   import { persistSettings } from '$stores/settings';
+  import { getVersion } from '@tauri-apps/api/app';
   import HotkeyConfig from './HotkeyConfig.svelte';
   import AudioConfig from './AudioConfig.svelte';
   import ProviderConfig from './ProviderConfig.svelte';
   import PresetConfig from './PresetConfig.svelte';
   import GeneralConfig from './GeneralConfig.svelte';
 
+  import appIconUrl from '../../src-tauri/icons/icon.svg';
+
   let { settings }: { settings: AppSettings } = $props();
 
   let activeTab = $state<'general' | 'hotkey' | 'audio' | 'providers' | 'presets'>('providers');
+  let appVersion = $state('');
+
+  getVersion().then((v) => (appVersion = v));
 
   async function handleUpdate(updated: AppSettings) {
     await persistSettings(updated);
@@ -26,7 +32,8 @@
 
 <div class="flex flex-col h-screen">
   <!-- Header -->
-  <div class="px-6 pt-5 pb-0">
+  <div class="px-6 pt-5 pb-0 flex items-center gap-3">
+    <img src={appIconUrl} alt="Pisum Transcript" class="w-8 h-8 rounded-lg" />
     <h1 class="text-lg font-semibold text-gray-900">Pisum Transcript Settings</h1>
   </div>
 
@@ -60,4 +67,11 @@
       <GeneralConfig {settings} onUpdate={handleUpdate} />
     {/if}
   </div>
+
+  <!-- Footer with version -->
+  {#if appVersion}
+    <div class="px-6 py-2 text-xs text-gray-400 text-right border-t border-gray-100">
+      v{appVersion}
+    </div>
+  {/if}
 </div>
