@@ -431,3 +431,4 @@ node_modules/
 
 # Package manager lock files are already tracked, but ignore others
 # package-lock.json is committed
+.claude/settings.local.json
