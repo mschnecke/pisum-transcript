@@ -307,6 +307,16 @@ pub fn run() {
             set_autostart,
         ])
         .setup(|app| {
+            // Hide from macOS dock — this is a menu-bar-only (tray) app
+            #[cfg(target_os = "macos")]
+            {
+                use objc2::MainThreadMarker;
+                use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+                let mtm = unsafe { MainThreadMarker::new_unchecked() };
+                let ns_app = NSApplication::sharedApplication(mtm);
+                ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+            }
+
             tray::setup_tray(app)?;
 
             // Initialize hotkey manager on main thread
