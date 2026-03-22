@@ -22,7 +22,9 @@ Whisper runs as a separate "local engine" mode distinct from the cloud provider 
 - As a user who wants to avoid recurring costs, I want local transcription so that I don't need API keys or pay per-request fees.
 - As a user on a MacBook with Apple Silicon, I want transcription to use my GPU so that results come back in under 3 seconds.
 - As a user on a Windows laptop with integrated graphics, I want Vulkan acceleration so that transcription is fast without a dedicated GPU.
-- As a first-time user, I want the app to download the required model automatically so that I don't have to find and manage model files manually.
+- As a first-time user, I want the app to guide me through downloading the required model so that I don't have to find and manage model files manually.
+- As a user with limited disk space, I want to delete models I no longer need so that I can reclaim storage.
+- As a user who needs faster transcription, I want to switch to a smaller model so that I get results more quickly at the cost of accuracy.
 
 ## 4. Functional Requirements
 
@@ -36,7 +38,7 @@ Whisper runs as a separate "local engine" mode distinct from the cloud provider 
 
 ### 4.2 Audio Pipeline
 
-6. The `TranscriptionProvider` trait must be extended to support an alternative input format: raw f32 PCM audio samples alongside the existing encoded byte array (`&[u8]`) input.
+6. The system must pass raw f32 PCM samples (16 kHz, mono) to the Whisper provider and encoded audio bytes with MIME type to cloud providers. The audio pipeline must determine the correct format based on the active transcription mode before invoking the provider.
 7. When the Whisper provider is active, the system must skip Opus/WAV encoding and instead resample the raw cpal f32 PCM audio to 16 kHz mono.
 8. The system must use the existing `rubato` resampling infrastructure (already in the project for Opus encoding) to perform the 16 kHz resampling.
 9. If the source audio is multi-channel, the system must mix down to mono before passing to Whisper.
@@ -47,7 +49,7 @@ Whisper runs as a separate "local engine" mode distinct from the cloud provider 
 11. The system must use `whisper-rs` v0.16.0 (or latest compatible) to perform local transcription.
 12. On macOS, the system must compile with the `metal` feature flag to enable Apple Silicon GPU acceleration.
 13. On Windows, the system must compile with the `vulkan` feature flag to enable integrated GPU acceleration.
-14. The system must load the selected GGML model file into a `WhisperContext` on startup (or on first transcription) and keep it in memory for subsequent transcriptions.
+14. The system must load the selected GGML model file into a `WhisperContext` on the first transcription request after app launch (or after model selection change) and keep it in memory for subsequent transcriptions.
 15. The system must configure Whisper parameters for the **translate** task to ensure English output.
 16. The system must use Whisper's **translate** task (not transcribe) to produce English text output regardless of the spoken language (German or English).
 17. The system must allow the user to configure the input language hint (Auto, German, or English) to improve detection accuracy, but output is always English.
@@ -60,8 +62,8 @@ Whisper runs as a separate "local engine" mode distinct from the cloud provider 
     - Large: `ggml-large-v3-turbo-q5_0.bin` (~574 MB) — default, best accuracy
     - Small: `ggml-small-q5_1.bin` (~200 MB) — lightweight alternative
     - Base: `ggml-base-q5_1.bin` (~60 MB) — minimal, for constrained hardware
-21. The system must store downloaded models in the platform-appropriate app data directory (`tauri::api::path::app_data_dir` or equivalent).
-22. On first launch (or when Local mode is selected with no model present), the system must automatically initiate download of the default model (`large-v3-turbo-q5_0`).
+21. The system must store downloaded models in the platform-appropriate app data directory using Tauri 2's `AppHandle::path().app_data_dir()` API, under a `models/` subdirectory.
+22. When Local mode is selected and no model is downloaded, the system must display a prompt explaining that a model download is required (~574 MB for the default model) and provide a 'Download Now' button. The download must not start automatically.
 23. The system must download models from HuggingFace's `ggerganov/whisper.cpp` repository (the canonical source for GGML Whisper models).
 24. The system must display a download progress indicator (percentage and MB downloaded) in the settings UI during model downloads.
 25. The system must allow the user to cancel an in-progress model download.
@@ -69,26 +71,32 @@ Whisper runs as a separate "local engine" mode distinct from the cloud provider 
 27. The system must allow the user to switch between downloaded models in the settings UI.
 28. The system must allow the user to delete downloaded models to reclaim disk space.
 29. The system must display which models are currently downloaded and their file sizes in the settings UI.
-30. The system must handle download failures gracefully — display an error message and allow retry.
+30. The system must handle download failures gracefully — including network timeouts, DNS resolution failures, and incomplete downloads — by displaying a specific error message describing the failure and allowing retry. Partially downloaded files must be cleaned up on failure.
+31. The system must support only one model download at a time. Initiating a new download while one is in progress must be prevented, with a message indicating the current download must complete or be cancelled first.
 
 ### 4.5 Settings UI
 
-31. The settings UI must include a new top-level toggle or tab for selecting the transcription mode (Local vs. Cloud).
-32. When Local mode is selected, the settings UI must show Whisper-specific configuration:
+32. The settings UI must include a new top-level toggle or tab for selecting the transcription mode (Local vs. Cloud).
+33. When Local mode is selected, the settings UI must show Whisper-specific configuration:
     - Model selection (dropdown of available models with download status)
     - Language preference (Auto / German / English)
     - Download/delete model buttons
     - Download progress indicator
     - Current model status (loaded, not downloaded, downloading)
-33. When Cloud mode is selected, the settings UI must show the existing provider configuration (unchanged).
-34. The model selection dropdown must indicate which models are downloaded (with file size) vs. available for download.
-35. The settings UI must display a visual indicator when the Whisper model is loaded and ready for transcription.
+34. When Cloud mode is selected, the settings UI must show the existing provider configuration (unchanged).
+35. The model selection dropdown must indicate which models are downloaded (with file size) vs. available for download.
+36. The settings UI must display a visual indicator when the Whisper model is loaded and ready for transcription.
 
 ### 4.6 Error Handling
 
-36. If Whisper inference fails, the system must display an error notification via the system tray (consistent with existing cloud provider error behavior).
-37. If the selected model file is missing or corrupted, the system must notify the user and prompt re-download.
-38. If GPU acceleration fails at runtime, the system must fall back to CPU-only inference transparently and notify the user.
+37. If Whisper inference fails, the system must display an error notification via the system tray (consistent with existing cloud provider error behavior).
+38. If the selected model file is missing or corrupted, the system must notify the user and prompt re-download.
+39. If GPU acceleration fails at runtime, the system must fall back to CPU-only inference transparently and notify the user.
+
+### 4.7 Mode Switching
+
+40. New installations must default to Cloud transcription mode.
+41. When the user switches from Local to Cloud mode, the system must unload the WhisperContext to free memory. When switching back to Local mode, the model is reloaded on the next transcription request (per Req #14).
 
 ## 5. Non-Goals (Out of Scope)
 
@@ -99,6 +107,7 @@ Whisper runs as a separate "local engine" mode distinct from the cloud provider 
 - Not included: Whisper prompt/initial_prompt configuration. Whisper operates with its default prompting behavior.
 - Not included: NVIDIA Parakeet/Canary model support (potential future enhancement via `transcribe-rs` crate).
 - Not included: CoreML/ANE acceleration on macOS. Metal GPU acceleration is sufficient for the target use case.
+- Not included: Linux platform support. Linux builds are not part of the initial Whisper integration. GPU acceleration backend (CUDA, Vulkan, or CPU-only) for Linux will be evaluated separately.
 - Not included: Model bundling in the installer. Models are downloaded on-demand to keep the installer small.
 - Not included: Cross-compilation. Each platform is built natively in CI.
 
@@ -136,21 +145,15 @@ The settings page gains a new top-level control for transcription mode. When "Lo
 
 ### Trait Modification
 
-The `TranscriptionProvider::transcribe()` method signature needs to support raw f32 audio as an alternative to encoded bytes. Options:
-- Add a second method `transcribe_raw(&self, samples: &[f32], sample_rate: u32)` with a default implementation that returns an error
-- Change `transcribe()` to accept an enum `AudioInput { Encoded { data: &[u8], mime_type: &str }, Raw { samples: &[f32], sample_rate: u32 } }`
-
-The pipeline decision (encode vs. raw) is made upstream based on the active transcription mode.
+The `TranscriptionProvider::transcribe()` method must accept an `AudioInput` enum with variants `Encoded { data: Vec<u8>, mime_type: String }` and `Raw { samples: Vec<f32>, sample_rate: u32 }`. The pipeline selects the appropriate variant based on the active transcription mode.
 
 ### Model Storage
 
-Models are stored in:
-- macOS: `~/Library/Application Support/com.pisum.transcript/models/`
-- Windows: `%APPDATA%\com.pisum.transcript\models\`
+Models are stored under the `models/` subdirectory of the platform app data directory, resolved via Tauri 2's `AppHandle::path().app_data_dir()` API using the bundle identifier from `tauri.conf.json`. The exact paths are platform-determined and should not be hardcoded.
 
 ### WhisperContext Lifecycle
 
-The `WhisperContext` (loaded model) should be held in a global state similar to `PROVIDER_POOL`. Loading a model takes 1-5 seconds depending on model size and hardware, so it should be loaded eagerly when Local mode is active, not on every transcription request.
+The `WhisperContext` (loaded model) should be held in a global state similar to `PROVIDER_POOL`. Loading a model takes 1-5 seconds depending on model size and hardware, so it should be loaded lazily on the first transcription request (not eagerly on startup). The context must be unloaded when switching to Cloud mode to free memory (see Req #41).
 
 ### Build System Impact
 
@@ -180,12 +183,14 @@ Download progress should be communicated to the frontend via Tauri events (not p
 
 - Transcription latency under 3 seconds for 30-second audio clips on Apple Silicon M4 with Metal acceleration
 - Transcription latency under 5 seconds for 30-second audio clips on ThinkPad E14 x86-64 with Vulkan acceleration
-- English output accuracy comparable to Whisper large-v3 (WER within 0.02 of F16 baseline) for both German and English speech input
+- Quantized model output for a 30-second German-to-English test clip must produce semantically equivalent text to the same clip processed by the F16 model (manual spot-check of 5 representative clips)
 - Model download completes successfully with progress tracking on both macOS and Windows
 - Zero runtime crashes from whisper-rs integration on either platform
 - App startup time increases by no more than 2 seconds when a Whisper model is loaded
 
 ## 9. Open Questions
+
+> All open questions have been resolved.
 
 - [x] Should the app support downloading models from a custom/mirror URL for users behind corporate firewalls? -> No
 - [x] What is the fallback behavior if Vulkan drivers are not available on a Windows machine — should the app auto-detect and disable the Vulkan feature, or let whisper.cpp fall back to CPU transparently? -> Let whisper.cpp fall back to CPU transparently.
