@@ -192,6 +192,8 @@ fn worker_loop(rx: mpsc::Receiver<WorkerCmd>) {
                     }
                     params.set_translate(translate);
                     params.set_no_timestamps(true);
+                    params.set_suppress_blank(true);
+                    params.set_suppress_nst(true);
                     params.set_print_special(false);
                     params.set_print_progress(false);
                     params.set_print_realtime(false);
@@ -200,16 +202,16 @@ fn worker_loop(rx: mpsc::Receiver<WorkerCmd>) {
                         AppError::Transcription(format!("Whisper inference failed: {e}"))
                     })?;
 
-                    let num_segments = state.full_n_segments().map_err(|e| {
-                        AppError::Transcription(format!("Failed to get segments: {e}"))
-                    })?;
+                    let num_segments = state.full_n_segments();
 
                     let mut text = String::new();
                     for i in 0..num_segments {
-                        if let Ok(segment) = state.full_get_segment_text(i) {
-                            text.push_str(segment.trim());
-                            if i < num_segments - 1 {
-                                text.push(' ');
+                        if let Some(segment) = state.get_segment(i) {
+                            if let Ok(s) = segment.to_str_lossy() {
+                                text.push_str(s.trim());
+                                if i < num_segments - 1 {
+                                    text.push(' ');
+                                }
                             }
                         }
                     }

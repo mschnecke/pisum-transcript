@@ -139,7 +139,7 @@ impl Default for WhisperConfig {
 }
 
 fn default_whisper_model() -> String {
-    "large-v3".to_string()
+    "small".to_string()
 }
 
 impl Default for AppSettings {

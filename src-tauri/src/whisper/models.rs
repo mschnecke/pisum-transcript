@@ -32,14 +32,6 @@ pub const MODEL_TIERS: &[ModelTier] = &[
         description: "Good accuracy, lighter alternative",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
     },
-    ModelTier {
-        id: "base",
-        name: "Base",
-        file_name: "ggml-base-q5_1.bin",
-        size_bytes: 60_000_000,
-        description: "Minimal, for constrained hardware",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
-    },
 ];
 
 pub fn get_model_tier(id: &str) -> Option<&'static ModelTier> {

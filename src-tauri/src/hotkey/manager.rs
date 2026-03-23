@@ -360,6 +360,13 @@ fn transcribe_local(
     sample_rate: u32,
     channels: u16,
 ) -> Result<String, AppError> {
+    // Reject dead silence (all zeros) before expensive Whisper inference.
+    // Use a very low threshold to catch only truly silent/dead input devices.
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+    if rms < 0.0001 {
+        return Err(AppError::Audio("No speech detected (audio is silent)".into()));
+    }
+
     let resampled = audio::encoder::resample_for_whisper(samples, sample_rate, channels)?;
 
     // Get the app handle for model path resolution
