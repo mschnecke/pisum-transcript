@@ -114,7 +114,7 @@
 					<select
 						value={provider.providerType}
 						onchange={(e) => {
-							const newType = e.currentTarget.value as 'gemini' | 'openai';
+							const newType = e.currentTarget.value as 'gemini';
 							// Clear model and cached models when switching provider type
 							const oldCacheKey = `${provider.providerType}:${provider.apiKey}`;
 							const { [oldCacheKey]: _, ...rest } = modelsCache;
@@ -124,7 +124,6 @@
 						class="rounded-lg border border-gray-200 bg-white px-2 py-0.5 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-300"
 					>
 						<option value="gemini">Gemini</option>
-						<option value="openai">OpenAI</option>
 					</select>
 					{#if !provider.enabled}
 						<span class="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-500">Disabled</span>
@@ -193,11 +192,7 @@
 						disabled={!provider.apiKey}
 						class="flex-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:bg-gray-50 disabled:text-gray-400"
 					>
-						<option value=""
-							>{provider.providerType === 'openai'
-								? 'Default (gpt-4o-mini-audio-preview)'
-								: 'Default (gemini-2.5-flash-lite)'}</option
-						>
+						<option value="">Default (gemini-2.5-flash-lite)</option>
 						{#if loadingModels[provider.id]}
 							<option disabled>Loading models...</option>
 						{/if}

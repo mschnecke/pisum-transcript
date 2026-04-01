@@ -22,7 +22,7 @@ export interface Preset {
 
 export interface ProviderConfig {
 	id: string;
-	providerType: 'gemini' | 'openai';
+	providerType: 'gemini';
 	apiKey: string;
 	model: string | null;
 	enabled: boolean;

@@ -2,7 +2,7 @@
 
 ## 1. Introduction/Overview
 
-Pisum Transcript currently relies exclusively on cloud AI providers (Gemini, OpenAI) for speech-to-text transcription. This feature adds offline, local transcription using whisper.cpp via the `whisper-rs` Rust crate. Users will be able to transcribe speech entirely on-device without an internet connection or API costs.
+Pisum Transcript currently relies exclusively on a cloud AI provider (Gemini) for speech-to-text transcription. This feature adds offline, local transcription using whisper.cpp via the `whisper-rs` Rust crate. Users will be able to transcribe speech entirely on-device without an internet connection or API costs.
 
 Whisper runs as a separate "local engine" mode distinct from the cloud provider pool. Users choose either local Whisper transcription or cloud-based transcription — they are not mixed in the round-robin provider pool.
 
@@ -32,7 +32,7 @@ Whisper runs as a separate "local engine" mode distinct from the cloud provider 
 
 1. The system must provide a setting to choose between "Local (Whisper)" and "Cloud" transcription modes.
 2. When "Local (Whisper)" mode is selected, the system must bypass the cloud provider pool entirely and use the local Whisper engine for all transcription.
-3. When "Cloud" mode is selected, the system must use the existing cloud provider pool (Gemini/OpenAI) as it does today.
+3. When "Cloud" mode is selected, the system must use the existing cloud provider pool (Gemini) as it does today.
 4. The system must persist the selected transcription mode in settings.
 5. The system must prevent transcription attempts in Local mode if no model is downloaded, and display a clear message directing the user to download a model.
 

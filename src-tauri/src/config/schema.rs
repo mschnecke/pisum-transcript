@@ -89,8 +89,6 @@ pub enum RecordingMode {
 #[serde(rename_all = "lowercase")]
 pub enum ProviderType {
     Gemini,
-    #[serde(rename = "openai")]
-    OpenAi,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
