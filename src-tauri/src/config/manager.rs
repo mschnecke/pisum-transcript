@@ -39,8 +39,30 @@ pub fn load_settings() -> Result<AppSettings, AppError> {
     let contents = std::fs::read_to_string(&path)
         .map_err(|e| AppError::Config(format!("Failed to read settings: {}", e)))?;
 
-    let mut settings: AppSettings = serde_json::from_str(&contents)
+    let mut raw: serde_json::Value = serde_json::from_str(&contents)
         .map_err(|e| AppError::Config(format!("Failed to parse settings: {}", e)))?;
+
+    // Silently filter out removed provider types (e.g., OpenAI)
+    let needs_migration =
+        if let Some(providers) = raw.get_mut("providers").and_then(|v| v.as_array_mut()) {
+            let original_len = providers.len();
+            providers.retain(|p| {
+                p.get("providerType")
+                    .and_then(|v| v.as_str())
+                    .map(|t| t != "openai")
+                    .unwrap_or(true)
+            });
+            providers.len() != original_len
+        } else {
+            false
+        };
+
+    let mut settings: AppSettings = serde_json::from_value(raw)
+        .map_err(|e| AppError::Config(format!("Failed to parse settings: {}", e)))?;
+
+    if needs_migration {
+        save_settings(&settings)?;
+    }
 
     // Merge built-in presets: add any that are missing
     let builtins = get_builtin_presets();
